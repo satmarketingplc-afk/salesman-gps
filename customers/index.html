@@ -232,7 +232,21 @@ async function decrypt(payload, passphrase) {
 }
 
 // Online-only: always read from the hosted repo (GitHub raw). No local/file fallbacks.
-const DATA_URL = "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/customers.enc.json";
+// Owner/repo derived from the page URL so forks/renames need no code edit.
+(function () {
+  const host = location.hostname;
+  let owner = "satmarketingplc-afk", repo = "salesman-gps";
+  const ghPages = host.match(/^(?:www\.)?([^./]+)\.github\.(io|dev)$/);
+  if (ghPages) {
+    owner = ghPages[1];
+    const seg = location.pathname.split("/").filter(Boolean);
+    if (seg.length && !["dashboard", "customers", "reports", "app"].includes(seg[0])) repo = seg[0];
+  }
+  const q = new URLSearchParams(location.search);
+  window.GH_OWNER = q.get("owner") || owner;
+  window.GH_REPO_NAME = q.get("repo") || repo;
+})();
+const DATA_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO_NAME}/main/dashboard/public/customers.enc.json`;
 
 const escapeHtml = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));

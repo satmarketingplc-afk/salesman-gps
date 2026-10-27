@@ -367,7 +367,15 @@ async function main() {
   let stored = 0;
   let skipped = 0;
   const dirty = new Set();
-  const unmapped = (await readJson(path.join(ARCHIVE, "unmapped.enc.json"), null)) || [];
+  // quarantined corrupt entries are kept so a bad file never crashes the pass
+  const unmappedRaw = (await readJson(path.join(ARCHIVE, "unmapped.enc.json"), null)) || [];
+  const unmapped = Array.isArray(unmappedRaw) ? unmappedRaw : [];
+  if (!Array.isArray(unmappedRaw) && Object.keys(unmappedRaw).length) {
+    for (const [k, v] of Object.entries(unmappedRaw)) {
+      if (Array.isArray(v)) unmapped.push(...v.map((x) => ({ ...x, _from: k })));
+      else if (v && typeof v === "object") unmapped.push({ ...v, _from: k });
+    }
+  }
 
   const custMonths = new Map(); // month -> decrypted entries, loaded lazily
   const newCustomers = [];
@@ -602,11 +610,23 @@ async function main() {
   // ---- encrypted live payload for the public dashboard ----
   const now = Date.now();
   const live = [];
+  let noTg = 0, noPoints = 0;
+  // dayKey(now) is UTC-based: in EAT (UTC+3) early morning hours roll over to the
+  // previous UTC day, so also check that file — otherwise a salesman who joined at
+  // 08:00 EAT would not appear on the map until 03:00 UTC.
+  const todayKeys = [dayKey(new Date(now).toISOString())];
+  const yest = new Date(now - 86400000);
+  if (!todayKeys.includes(dayKey(yest.toISOString()))) todayKeys.push(dayKey(yest.toISOString()));
   for (const sm of roster.salesmen || []) {
     if (sm.active === false) continue;
-    const day = dayKey(new Date(now).toISOString());
-    const pings = await loadDay(sm.code, day);
-    if (!pings.length) continue;
+    if (!sm.tg) { noTg++; console.warn(`[poller] ${sm.code} (${sm.name}) has NO telegram id linked — send /join ${sm.code} to the bot`); continue; }
+    let pings = [];
+    for (const day of todayKeys) {
+      const part = await loadDay(sm.code, day);
+      if (part.length) { pings = [...pings, ...part]; }
+    }
+    pings.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    if (!pings.length) { noPoints++; console.warn(`[poller] ${sm.code} (${sm.name}) has no location points today — not on the map until they Share live location`); continue; }
     // whole day, so the line on the map matches the distance the card reports;
     // decimated to ~400 points: enough for the shape, small enough to commit every 2 min
     const raw = pings.slice(-TRAIL_POINTS);
@@ -673,6 +693,9 @@ async function main() {
       `cards=${newCustomers.length} replied=${replied} people=${live.length} ` +
       `joined=${joined} errors=${errorCount} dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
   );
+  if (noTg || noPoints) {
+    console.log(`[poller] not on map: ${noTg} salesman without telegram id (/join CODE), ${noPoints} linked but no location today`);
+  }
 }
 
 main().catch((err) => fail(err.stack || String(err)));
