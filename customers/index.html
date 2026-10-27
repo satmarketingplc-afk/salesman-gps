@@ -184,7 +184,7 @@ const I18N = {
     search:"Search name, phone, shop", all:"All", lead:"Lead", quote:"Quoted", won:"Won", lost:"Lost",
     board:"Board", list:"List",
     passTitle:"Passphrase", passHint:"Customer cards are encrypted. Enter the dashboard passphrase.",
-    open:"Open customers", wrongPass:"Wrong passphrase.", noData:"No customer cards yet.",
+    open:"Open customers", wrongPass:"Wrong passphrase.", noData:"No customer cards yet.", loadFail:"Could not reach GitHub — check your connection. Your passphrase was kept, try again in a moment.",
     total:"customers", month:"this month", wonCount:"won", value:"with location",
     generated:"updated", note:"Encrypted on GitHub. Visible only with the passphrase.",
     salesman:"by", mapLink:"map", qty:"qty", today:"Today", yesterday:"Yesterday",
@@ -195,7 +195,7 @@ const I18N = {
     search:"ስም፣ ስልክ ወይም ሱቅ ይፈልጉ", all:"ሁሉም", lead:"አዲስ", quote:"ዋጋ ተሰጥቷል", won:"ተሸጠ", lost:"አልተሸጠም",
     board:"ሰሌዳ", list:"ዝርዝር",
     passTitle:"የመግቢያ ቃል", passHint:"የደንበኞች ካርዶች ተመስጥረዋል። የካርታውን የመግቢያ ቃል ያስገቡ።",
-    open:"ደንበኞችን ክፈት", wrongPass:"የመግቢያ ቃሉ ስህተት ነው።", noData:"እስካሁን የደንበኛ ካርድ የለም።",
+    open:"ደንበኞችን ክፈት", wrongPass:"የመግቢያ ቃሉ ስህተት ነው።", noData:"እስካሁን የደንበኛ ካርድ የለም።", loadFail:"GitHub መድረስ አልተቻለም — መገናኛችሁን ያረጋግጡ። የመግቢያ ቃሉ ተጠብቋል፤ ትንሽ ቆይተው እንደገና ይሞክሩ።",
     total:"ደንበኞች", month:"በዚህ ወር", wonCount:"ተሸጠ", value:"አካባቢ ያለው",
     generated:"የተዘመነ", note:"በGitHub ላይ ተመስጥሯል። በመግቢያ ቃል ብቻ ይታያል።",
     salesman:"በ", mapLink:"ካርታ", qty:"ብዛት", today:"ዛሬ", yesterday:"ትናንት",
@@ -307,6 +307,22 @@ async function load() {
     $("generated").textContent = `${t("generated")} ${new Date(data.generated).toLocaleTimeString("en-GB", { timeZone:"Africa/Addis_Ababa" })} EAT`;
     render();
   } catch (err) {
+    const msg = String(err && err.message || err);
+    // Only a failed AES-GCM decrypt (DOMException "OperationError") means wrong passphrase.
+    // Network/JSON failures must not wipe the stored passphrase or claim it is wrong.
+    const isDecryptFailure = err && err.name === "OperationError";
+    if (!isDecryptFailure) {
+      if (msg.includes("http 404")) {
+        data = { generated: new Date().toISOString(), team: [], entries: [] };
+        $("gate").classList.add("hidden");
+        render();
+        return;
+      }
+      $("gateErr").textContent = t("loadFail");
+      $("gateErr").style.display = "block";
+      $("gate").classList.remove("hidden");
+      return;
+    }
     sessionStorage.removeItem("smgps_pass");
     $("gateErr").textContent = t("wrongPass");
     $("gateErr").style.display = "block";

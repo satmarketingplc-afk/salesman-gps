@@ -134,7 +134,7 @@ const I18N = {
     subtitle:"Daily activity", map:"Map", csv:"CSV", refresh:"Refresh",
     search:"Search name or code", passTitle:"Passphrase",
     passHint:"The reports are encrypted. Enter the dashboard passphrase.",
-    open:"Open reports", wrongPass:"Wrong passphrase.", noData:"No activity recorded yet.",
+    open:"Open reports", wrongPass:"Wrong passphrase.", noData:"No activity recorded yet.", loadFail:"Could not reach GitHub — check your connection. Your passphrase was kept, try again in a moment.",
     people:"people", distance:"distance", pings:"points", days:"days recorded",
     name:"Salesman", first:"First seen", last:"Last seen", livePts:"live",
     generated:"updated", note:"Times are EAT. Distance ignores GPS jumps over 500 m.",
@@ -144,7 +144,7 @@ const I18N = {
     subtitle:"የቀን እንቅስቃሴ", map:"ካርታ", csv:"CSV", refresh:"አድስ",
     search:"ስም ወይም ኮድ ይፈልጉ", passTitle:"የመግቢያ ቃል",
     passHint:"ሪፖርቶቹ ተመስጥረዋል። የካርታውን የመግቢያ ቃል ያስገቡ።",
-    open:"ሪፖርቱን ክፈት", wrongPass:"የመግቢያ ቃሉ ስህተት ነው።", noData:"እስካሁን እንቅስቃሴ የለም።",
+    open:"ሪፖርቱን ክፈት", wrongPass:"የመግቢያ ቃሉ ስህተት ነው።", noData:"እስካሁን እንቅስቃሴ የለም።", loadFail:"GitHub መድረስ አልተቻለም — መገናኛችሁን ያረጋግጡ። የመግቢያ ቃሉ ተጠብቋል፤ ትንሽ ቆይተው እንደገና ይሞክሩ።",
     people:"ሰዎች", distance:"ርቀት", pings:"ነጥቦች", days:"የተመዘገቡ ቀናት",
     name:"ሽያጭ ሠራተኛ", first:"የመጀመሪያ", last:"መጨረሻ", livePts:"ቀጥታ",
     generated:"የተዘመነ", note:"ሰዓቶች በምስራቅ አፍሪካ ሰዓት ናቸው። ከ500 ሜ በላይ የጂፒኤስ መዝለል አይቆጠርም።",
@@ -245,10 +245,20 @@ async function load() {
     $("generated").textContent = `${t("generated")} ${new Date(data.generated).toLocaleTimeString("en-GB", { timeZone: "Africa/Addis_Ababa" })} EAT`;
     render();
   } catch (err) {
-    if (String(err.message).includes("http 404")) {
-      data = { generated: new Date().toISOString(), days: [] };
-      $("gate").classList.add("hidden");
-      render();
+    const msg = String(err && err.message || err);
+    // Only a failed AES-GCM decrypt (DOMException "OperationError") means wrong passphrase.
+    // Network/JSON failures must not wipe the stored passphrase or claim it is wrong.
+    const isDecryptFailure = err && err.name === "OperationError";
+    if (!isDecryptFailure) {
+      if (msg.includes("http 404")) {
+        data = { generated: new Date().toISOString(), days: [] };
+        $("gate").classList.add("hidden");
+        render();
+        return;
+      }
+      $("gateErr").textContent = t("loadFail");
+      $("gateErr").style.display = "block";
+      $("gate").classList.remove("hidden");
       return;
     }
     sessionStorage.removeItem("smgps_pass");
