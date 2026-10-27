@@ -25,7 +25,7 @@ const PASS = process.env.DASH_PASSPHRASE || "";
 const LOOKBACK_MS = Number(process.env.LOOKBACK_MS || 4 * 3600 * 1000);
 
 const EAT_MS = 3 * 3600 * 1000;
-const ONLINE_MS = 3 * 60 * 1000;
+const ONLINE_MS = Number(process.env.ONLINE_MS || 10 * 60 * 1000);
 const TRAIL_POINTS = 400;
 const MIN_MOVE_M = 8;
 
