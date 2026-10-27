@@ -290,7 +290,12 @@ const hhmm = (iso) =>
 const cardsLabel = (n) => (lang === "am" ? `${n} ${t("cards")}` : `${n} card${n === 1 ? "" : "s"}`);
 
 async function load() {
-  const pass = sessionStorage.getItem("smgps_pass");
+  let pass = sessionStorage.getItem("smgps_pass");
+  if (pass && pass !== pass.trim()) {
+    // Self-heal entries stored by older builds that kept copy-paste whitespace.
+    sessionStorage.setItem("smgps_pass", pass.trim());
+    pass = pass.trim();
+  }
   if (!pass) { $("gate").classList.remove("hidden"); return; }
   try {
     const res = await fetch(`${DATA_URL}?t=${Date.now()}`, { cache: "no-store" });
