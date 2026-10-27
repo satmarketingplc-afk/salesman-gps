@@ -41,8 +41,13 @@ private/roster.enc.json                    code → name, colour, telegram id (e
 The telegram id is not stored in the archive — it only lives in the encrypted roster, so a
 leaked day file cannot be tied to a phone number.
 
-**Dedupe:** a ping is dropped when it is older than the last one, or when the phone moved
-less than 8 m. Telegram re-sends the same coordinates while a person stands still.
+**Dedupe (time-based):** a ping is kept when its timestamp is at least `MIN_INTERVAL_S`
+(default 60 s) newer than the last stored point; anything closer is dropped as a duplicate.
+Distance-based dropping was removed: Telegram re-sends identical coordinates while a person
+stands still, so an 8 m rule froze trails and made stationary salesmen look offline. With the
+60 s heartbeat a standing person still produces a point every minute and stays `online`.
+Exact replays (same update_id range re-read after a crash) are always dropped because their
+timestamp does not advance.
 
 ## Live payload
 

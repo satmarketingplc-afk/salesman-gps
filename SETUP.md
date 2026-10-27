@@ -260,6 +260,8 @@ Releases). The free plan is not the limit — the whole-file rewrite pattern is.
 | Nobody appears | telegram id not in roster | `node scripts/roster.mjs unmapped` then `add` |
 | "Wrong passphrase" | typo, or secret changed | re-enter; if secret changed, wait for next run |
 | Pin frozen for hours | GitHub disabled the schedule after 60 days idle | any push re-enables it; bot commits normally keep it alive |
+| Pin frozen although live location is shared | salesman's Telegram id is not in the roster — his pings land in `unmapped`, not on the map | `node scripts/roster.mjs unmapped` then `node scripts/roster.mjs tg SM-001 <id>`; commit + push `private/roster.enc.json`; pin appears within one poll pass |
+| "Wrong passphrase" on every page even though it is correct | files were encrypted with an older passphrase (after rotation) | re-encrypt archive + roster + live payload with the new phrase, or restore the old secret |
 | Refresh says "Could not reach the server" | opened the GitHub Pages copy (no `/api`), or the Render service is asleep | use the Render URL; the keep-alive ping should keep it awake |
 | Refresh says "Please wait 20s" | someone just pressed it | wait for the countdown; 90 s per salesman |
 | Render answers 502 after a quiet night | free service was asleep | first request wakes it (~50 s); check the keep-alive monitor |
