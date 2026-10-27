@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0b3b2e" />
+<title>Salesman GPS</title>
+<style>
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(160deg,#0b3b2e,#0f5741 70%,#12664c);
+    font-family:'Segoe UI',system-ui,-apple-system,'Nyala','Abyssinica SIL',sans-serif;
+    color:#fff; padding:24px;
+  }
+  .wrap{width:100%; max-width:440px; text-align:center}
+  svg{width:64px;height:64px;margin-bottom:10px}
+  h1{font-size:22px; margin:0 0 4px; letter-spacing:.2px}
+  p.sub{margin:0 0 26px; font-size:13px; color:#a7f3d0}
+  a.card{
+    display:flex; align-items:center; gap:14px; text-align:left; padding:16px 18px;
+    background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.16);
+    border-radius:16px; margin-bottom:12px; text-decoration:none; color:#fff;
+    transition:background .15s, transform .15s;
+  }
+  a.card:hover{background:rgba(255,255,255,.13); transform:translateY(-1px)}
+  .ico{
+    width:42px;height:42px;border-radius:12px;background:#34d399;color:#0b3b2e;
+    display:flex;align-items:center;justify-content:center;font-size:20px;flex:none
+  }
+  .ico.blue{background:#38bdf8;color:#0f172a}
+  b{display:block; font-size:15px; margin-bottom:2px}
+  span{font-size:12.5px; color:#cbd5e1; line-height:1.4}
+  footer{margin-top:22px; font-size:11px; color:#86efac; opacity:.75}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <circle cx="24" cy="20" r="17" stroke="#34d399" stroke-opacity=".35" stroke-width="2"/>
+      <circle cx="24" cy="20" r="11" stroke="#34d399" stroke-opacity=".55" stroke-width="2"/>
+      <path d="M24 8c-5 0-9 4-9 9 0 6.6 9 15 9 15s9-8.4 9-15c0-5-4-9-9-9z" fill="#34d399"/>
+      <circle cx="24" cy="17" r="3.4" fill="#0b3b2e"/>
+    </svg>
+    <h1>Salesman GPS</h1>
+    <p class="sub">የሽያጭ ሠራተኞች ካርታ · live field positions</p>
+
+    <a class="card" href="./dashboard/">
+      <span class="ico blue">🗺️</span>
+      <span>
+        <b>Manager map · የአስተዳደር ካርታ</b>
+        <span>Live pins, trail, last seen — passphrase required</span>
+      </span>
+    </a>
+
+    <a class="card" href="./app/">
+      <span class="ico">📍</span>
+      <span>
+        <b>Salesman app · የሽያጭ ሠራተኛ</b>
+        <span>Share live location, shift timer, 3 steps</span>
+      </span>
+    </a>
+
+    <footer>Private archive · encrypted live view · made for Addis field work</footer>
+  </div>
+</body>
+</html>

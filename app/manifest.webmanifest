@@ -1,0 +1,19 @@
+{
+  "name": "Salesman GPS",
+  "short_name": "Sales GPS",
+  "description": "Field app for sharing your live location with the office.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f7f5",
+  "theme_color": "#0b3b2e",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

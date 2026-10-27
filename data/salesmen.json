@@ -1,0 +1,33 @@
+{
+  "updated": "2026-10-27",
+  "note": "tg = Telegram numeric user id (send /id to your bot to learn it). Colour is the pin colour.",
+  "salesmen": [
+    {
+      "code": "SM-001",
+      "name": "Abebe K.",
+      "nameAm": "አበበ ከ.",
+      "tg": 0,
+      "username": "",
+      "color": "#e11d48",
+      "active": true
+    },
+    {
+      "code": "SM-002",
+      "name": "Selam T.",
+      "nameAm": "ሰላም ተ.",
+      "tg": 0,
+      "username": "",
+      "color": "#2563eb",
+      "active": true
+    },
+    {
+      "code": "SM-003",
+      "name": "Dawit M.",
+      "nameAm": "ዳዊት ም.",
+      "tg": 0,
+      "username": "",
+      "color": "#059669",
+      "active": true
+    }
+  ]
+}

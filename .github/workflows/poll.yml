@@ -1,0 +1,47 @@
+name: poll-telegram
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-poll
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Configure git
+        run: |
+          git config user.name  "smgps-bot"
+          git config user.email "smgps-bot@users.noreply.github.com"
+
+      - name: Poll loop (4.5 min, every 15 s)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          DASH_PASSPHRASE: ${{ secrets.DASH_PASSPHRASE }}
+        run: |
+          set -u
+          for i in $(seq 1 18); do
+            node scripts/poll_telegram.mjs || echo "poll failed, continuing"
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -q -m "pings $(date -u +%FT%TZ)"
+              git push -q origin HEAD:main || (git pull -q --rebase --autostash && git push -q origin HEAD:main)
+            fi
+            sleep 15
+          done

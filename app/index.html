@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0b3b2e" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Salesman GPS — የሽያጭ ሠራተኛ</title>
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<style>
+  :root{
+    --green:#0b3b2e; --green2:#0f5741; --mint:#34d399; --ink:#0f172a; --muted:#64748b;
+    --line:#e2e8f0; --bg:#f4f7f5; --card:#fff; --amber:#d97706; --red:#dc2626;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; min-height:100%}
+  body{
+    font-family:'Segoe UI',system-ui,-apple-system,'Nyala','Abyssinica SIL',sans-serif;
+    background:var(--bg); color:var(--ink); padding-bottom:26px;
+  }
+  header{
+    background:linear-gradient(160deg,var(--green) 0%,var(--green2) 100%);
+    color:#fff; padding:20px 18px 46px; position:relative;
+  }
+  header::after{
+    content:""; position:absolute; left:0; right:0; bottom:-1px; height:26px;
+    background:var(--bg); border-radius:26px 26px 0 0;
+  }
+  .top{display:flex; align-items:center; gap:10px}
+  .logo{width:34px;height:34px;flex:none}
+  .top b{font-size:16px; letter-spacing:.2px}
+  .top span{display:block; font-size:11px; color:#a7f3d0; letter-spacing:.4px; text-transform:uppercase}
+  .lang{
+    margin-left:auto; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.25);
+    color:#fff; border-radius:10px; padding:8px 11px; font-size:13px; cursor:pointer;
+  }
+  main{padding:0 16px; margin-top:-30px; position:relative; display:flex; flex-direction:column; gap:12px}
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px;
+    box-shadow:0 6px 20px rgba(11,59,46,.05);
+  }
+  .state{display:flex; align-items:center; gap:11px}
+  .pulse{
+    width:12px;height:12px;border-radius:50%;background:var(--muted); flex:none;
+    box-shadow:0 0 0 0 rgba(52,211,153,.6);
+  }
+  .on .pulse{background:var(--mint); animation:pulse 2s infinite}
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(52,211,153,.55)}
+    70%{box-shadow:0 0 0 12px rgba(52,211,153,0)}
+    100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}
+  }
+  .state b{font-size:17px}
+  .state small{display:block; color:var(--muted); font-size:12px; margin-top:2px}
+  .bar{height:7px; background:#e8eeeb; border-radius:999px; margin:14px 0 6px; overflow:hidden}
+  .bar i{display:block; height:100%; width:0; background:linear-gradient(90deg,var(--mint),#10b981); border-radius:999px; transition:width .5s}
+  .bar.warn i{background:linear-gradient(90deg,#fbbf24,var(--amber))}
+  .bar.done i{background:linear-gradient(90deg,#f87171,var(--red))}
+  .meta{display:flex; justify-content:space-between; font-size:12px; color:var(--muted)}
+  .btns{display:flex; gap:9px; margin-top:14px}
+  .btn{
+    flex:1; border:0; border-radius:13px; padding:14px 12px; font-size:15px; font-weight:600;
+    cursor:pointer; text-decoration:none; text-align:center; display:block;
+  }
+  .btn.primary{background:var(--green); color:#fff}
+  .btn.primary:active{background:var(--green2)}
+  .btn.ghost{background:#eef4f1; color:var(--green); border:1px solid #d9e6e0}
+  h2{font-size:14px; margin:0 0 12px; color:var(--muted); text-transform:uppercase; letter-spacing:.6px}
+  ol.steps{margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:11px}
+  ol.steps li{display:flex; gap:11px; align-items:flex-start}
+  .num{
+    width:26px;height:26px;border-radius:50%;background:#e8f5ef;color:var(--green);
+    display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none
+  }
+  ol.steps b{display:block; font-size:14px}
+  ol.steps span{font-size:12.5px; color:var(--muted); line-height:1.45}
+  .tip{
+    background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:13px;
+    padding:12px 14px; font-size:12.5px; line-height:1.55;
+  }
+  .tip b{color:#78350f}
+  footer{text-align:center; font-size:11px; color:var(--muted); padding:18px 16px 0}
+  .toast{
+    position:fixed; left:50%; bottom:22px; transform:translateX(-50%) translateY(20px);
+    background:var(--ink); color:#fff; padding:11px 16px; border-radius:11px; font-size:13px;
+    opacity:0; transition:.25s; pointer-events:none;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="top">
+    <svg class="logo" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <circle cx="24" cy="20" r="17" stroke="#34d399" stroke-opacity=".35" stroke-width="2"/>
+      <circle cx="24" cy="20" r="11" stroke="#34d399" stroke-opacity=".55" stroke-width="2"/>
+      <path d="M24 8c-5 0-9 4-9 9 0 6.6 9 15 9 15s9-8.4 9-15c0-5-4-9-9-9z" fill="#34d399"/>
+      <circle cx="24" cy="17" r="3.4" fill="#0b3b2e"/>
+    </svg>
+    <div>
+      <b>Salesman GPS</b>
+      <span data-i18n="role">Field app · የመስክ መተግበሪያ</span>
+    </div>
+    <button class="lang" id="lang">አማርኛ</button>
+  </div>
+</header>
+
+<main>
+  <section class="card" id="stateCard">
+    <div class="state" id="stateRow">
+      <span class="pulse"></span>
+      <div>
+        <b id="stateTitle">Not sharing</b>
+        <small id="stateSub">Start your shift so the office can see you</small>
+      </div>
+    </div>
+    <div class="bar" id="bar"><i></i></div>
+    <div class="meta">
+      <span id="left">8 h session</span>
+      <span id="pct">0%</span>
+    </div>
+    <div class="btns">
+      <a class="btn primary" id="openBot" href="https://t.me/" data-i18n="openBot">Open Telegram bot</a>
+      <button class="btn ghost" id="startBtn" data-i18n="start">Start shift</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="how">How to share your location</h2>
+    <ol class="steps">
+      <li><span class="num">1</span><div><b data-i18n="s1t">Open the bot</b><span data-i18n="s1d">Tap the button above — Telegram opens the company bot.</span></div></li>
+      <li><span class="num">2</span><div><b data-i18n="s2t">Attach → Location</b><span data-i18n="s2d">Tap the paperclip, choose Location, then Share Live Location.</span></div></li>
+      <li><span class="num">3</span><div><b data-i18n="s3t">Choose 8 hours</b><span data-i18n="s3d">The office sees you move for the whole shift. Nothing else needed.</span></div></li>
+    </ol>
+  </section>
+
+  <div class="tip">
+    <b data-i18n="tipT">Keep it running</b><br>
+    <span data-i18n="tipD">Sharing stops by itself after 8 hours. If the green dot in Telegram disappears, tap Attach → Location → Share Live Location again. Keep the phone charged — GPS uses about 4–6 % per hour.</span>
+  </div>
+
+  <section class="card">
+    <h2 data-i18n="privacy">Your privacy</h2>
+    <p style="margin:0; font-size:12.5px; color:var(--muted); line-height:1.6" data-i18n="privacyD">
+      Your position is stored in the company's private GitHub archive, visible only to management
+      with the dashboard passphrase. It is not published, sold, or shared with anyone else.
+    </p>
+  </section>
+</main>
+
+<footer>
+  <span data-i18n="foot">Works offline · installs to your home screen</span><br>
+  <span style="opacity:.7">v1 · Telegram live location</span>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const CONFIG = {
+  // set this once in SETUP.md step 1, e.g. "smgps_addis_bot"
+  bot: new URLSearchParams(location.search).get("bot") || "smgps_bot"
+};
+
+const T = {
+  en: {
+    role:"Field app", openBot:"Open Telegram bot", start:"Start shift", end:"End shift",
+    notSharing:"Not sharing", notSharingSub:"Start your shift so the office can see you",
+    sharing:"Sharing", sharingSub:"The office can see you — keep Telegram running",
+    renew:"Renew now — 8 hours are almost up",
+    expired:"Session finished — share again",
+    left:"left", how:"How to share your location",
+    s1t:"Open the bot", s1d:"Tap the button above — Telegram opens the company bot.",
+    s2t:"Attach → Location", s2d:"Tap the paperclip, choose Location, then Share Live Location.",
+    s3t:"Choose 8 hours", s3d:"The office sees you move for the whole shift. Nothing else needed.",
+    tipT:"Keep it running",
+    tipD:"Sharing stops by itself after 8 hours. If the green dot in Telegram disappears, tap Attach → Location → Share Live Location again. Keep the phone charged — GPS uses about 4–6 % per hour.",
+    privacy:"Your privacy",
+    privacyD:"Your position is stored in the company's private GitHub archive, visible only to management with the dashboard passphrase. It is not published, sold, or shared with anyone else.",
+    foot:"Works offline · installs to your home screen",
+    started:"Shift started", ended:"Shift ended"
+  },
+  am: {
+    role:"የመስክ መተግበሪያ", openBot:"የቴሌግራም ቦት ክፈት", start:"ሥራ ጀምር", end:"ሥራ ጨርስ",
+    notSharing:"አያጋራም", notSharingSub:"ቢሮው እንዲያይዎ ሥራዎን ይጀምሩ",
+    sharing:"በማጋራት ላይ", sharingSub:"ቢሮው ያይዎታል — ቴሌግራምን ክፈትተው ይተዉት",
+    renew:"አሁን ያድሱ — 8 ሰዓቱ ሊያልቅ ነው",
+    expired:"ክፍለ ጊዜው አልቋል — እንደገና ያጋሩ",
+    left:"ቀሪ", how:"አካባቢዎን እንዴት ማጋራት ይቻላል",
+    s1t:"ቦቱን ይክፈቱ", s1d:"ከላይ ያለውን ቁልፍ ይጫኑ — ቴሌግራም የኩባንያውን ቦት ይከፍታል።",
+    s2t:"አባሪ → አካባቢ", s2d:"የወረቀት መርጫውን ይጫኑ፣ አካባቢ ይምረጡ፣ ከዚያ ቀጥታ አካባቢ ያጋሩ።",
+    s3t:"8 ሰዓት ይምረጡ", s3d:"ቢሮው በሙሉ ፈረቃዎ ላይ እንቅስቃሴዎን ያያል። ሌላ ምንም አያስፈልግም።",
+    tipT:"እንዲሠራ ያቆዩት",
+    tipD:"ማጋራት ከ8 ሰዓት በኋላ በራሱ ያቆማል። በቴሌግራም ውስጥ አረንጓዴው ነጥብ ከጠፋ፣ እንደገና አባሪ → አካባቢ → ቀጥታ አካባቢ ያጋሩ። ስልኩን በኃይል ይሙሉ — ጂፒኤስ በሰዓት 4–6% ይጠቀማል።",
+    privacy:"ግላዊነትዎ",
+    privacyD:"አካባቢዎ በኩባንያው የግል ጊትሀብ መዝገብ ውስጥ ይቀመጣል፤ በካርታው የመግቢያ ቃል ላላቸው አስተዳደር ብቻ ይታያል። አይታተምም፣ አይሸጥም፣ ለሌላ ሰው አይጋራም።",
+    foot:"ከመስመር ውጭ ይሠራል · በመነሻ ማያ ገጽዎ ላይ ይጫናል",
+    started:"ፈረቃ ተጀመረ", ended:"ፈረቃ ተጠናቀቀ"
+  }
+};
+
+let lang = localStorage.getItem("smgps_lang") || "en";
+const t = (k) => T[lang][k] ?? T.en[k];
+const SHIFT_MS = 8 * 3600 * 1000;
+const $ = (id) => document.getElementById(id);
+
+function applyLang() {
+  document.documentElement.lang = lang === "am" ? "am" : "en";
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const k = el.getAttribute("data-i18n");
+    if (T[lang][k]) el.textContent = T[lang][k];
+  });
+  $("lang").textContent = lang === "am" ? "English" : "አማርኛ";
+  localStorage.setItem("smgps_lang", lang);
+  paint();
+}
+
+function toast(msg) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 1800);
+}
+
+function fmtLeft(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  return `${h}h ${String(m).padStart(2, "0")}m ${t("left")}`;
+}
+
+function paint() {
+  const start = Number(localStorage.getItem("smgps_shift") || 0);
+  const elapsed = start ? Date.now() - start : 0;
+  const pct = Math.min(100, (elapsed / SHIFT_MS) * 100);
+  const card = $("stateCard"), row = $("stateRow"), bar = $("bar");
+
+  bar.querySelector("i").style.width = `${pct}%`;
+  bar.className = "bar" + (pct > 92 ? " done" : pct > 78 ? " warn" : "");
+  $("pct").textContent = `${Math.round(pct)}%`;
+
+  if (!start) {
+    row.classList.remove("on");
+    $("stateTitle").textContent = t("notSharing");
+    $("stateSub").textContent = t("notSharingSub");
+    $("left").textContent = "8h";
+    $("startBtn").textContent = t("start");
+    return;
+  }
+
+  row.classList.add("on");
+  $("startBtn").textContent = t("end");
+
+  if (elapsed >= SHIFT_MS) {
+    row.classList.remove("on");
+    $("stateTitle").textContent = t("expired");
+    $("stateSub").textContent = t("renew");
+    $("left").textContent = "0h 00m";
+    return;
+  }
+
+  $("stateTitle").textContent = t("sharing");
+  $("stateSub").textContent = t("sharingSub");
+  $("left").textContent = fmtLeft(SHIFT_MS - elapsed);
+}
+
+$("startBtn").onclick = () => {
+  const start = Number(localStorage.getItem("smgps_shift") || 0);
+  if (start) {
+    localStorage.removeItem("smgps_shift");
+    toast(t("ended"));
+  } else {
+    localStorage.setItem("smgps_shift", String(Date.now()));
+    toast(t("started"));
+    window.open(`https://t.me/${CONFIG.bot}`, "_blank");
+  }
+  paint();
+};
+
+$("openBot").href = `https://t.me/${CONFIG.bot}`;
+$("lang").onclick = () => { lang = lang === "en" ? "am" : "en"; applyLang(); };
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+
+applyLang();
+setInterval(paint, 30000);
+</script>
+</body>
+</html>
