@@ -47,11 +47,11 @@ jobs:
               if ! git diff --cached --quiet; then
                 git commit -q -m "pings $(date -u +%FT%TZ)"
                 if ! git push -q origin HEAD:main; then
-                  # someone else pushed while we were polling: keep our files, land on top
+                  # someone pushed while we were polling: merge, letting remote files in
+                  # (a reset would silently delete files added during the run) and keeping
+                  # our regenerated archive/live payload.
                   git fetch -q origin main
-                  git reset -q --soft FETCH_HEAD
-                  git add -A
-                  git commit -q -m "pings $(date -u +%FT%TZ) (merge)"
+                  git merge -q --no-edit -X ours FETCH_HEAD || git merge --abort || true
                   git push -q origin HEAD:main || echo "push still blocked, next pass will retry"
                 fi
               fi

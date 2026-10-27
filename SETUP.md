@@ -98,7 +98,8 @@ it fetches the encrypted payload from GitHub on every page load.
 
 - Salesman taps **Share live location → 8 hours** at the start of the shift (the app reminds him).
 - Manager opens the dashboard, types the passphrase once per browser session.
-- Action runs every 5 minutes, keeps a 4.5-minute loop open, commits pings, refreshes the map.
+- Action re-triggers itself at the end of every 4.5-minute run (GitHub cron is only a backup),
+  commits pings every ~2 minutes, and refreshes the encrypted live file.
 
 ---
 

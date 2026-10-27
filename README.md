@@ -5,10 +5,10 @@ Telegram — no install, no training, works on Android and iPhone, keeps sending
 off for up to 8 hours.
 
 - **Capture:** Telegram live location (15 s updates)
-- **Store:** a private GitHub repo, plaintext, one JSONL file per salesman per day
-- **Live view:** encrypted file in the public repo, decrypted in the browser
-- **Hosting:** GitHub Pages
-- **Server:** none. One GitHub Action every 5 minutes.
+- **Store:** a GitHub repo, encrypted, one file per salesman per day
+- **Live view:** encrypted file in the repo, decrypted in the browser
+- **Hosting:** GitHub Pages or Render (static, `render.yaml` included)
+- **Server:** none. One GitHub Action that re-triggers itself.
 
 ## Quick start
 
