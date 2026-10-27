@@ -149,7 +149,7 @@ const I18N = {
     nudgeBusy:"Please wait {n}s before asking again.",
     nudgeFail:"Could not reach the server — showing the latest saved position.",
     passHint:"The positions are encrypted. Enter the dashboard passphrase to open the map.",
-    open:"Open map", wrongPass:"Wrong passphrase — trim extra spaces and capital letters, then try again. If it still fails, the team changed the passphrase or re-encrypted the data with a new one; ask for the current value.", staleFile:"The live file on GitHub looks older than 2 hours — the poller may have stopped or been re-encrypted with a different secret. Check the Actions tab for 'poll-telegram'.", noData:"No positions yet. Send a live location to the bot.", loadFail:"Could not reach GitHub — check your connection. The map will retry automatically; your passphrase was kept.",
+    open:"Open map", wrongPass:"Wrong passphrase — trim extra spaces and capital letters, then try again. If it still fails, the team changed the passphrase or re-encrypted the data with a new one; ask for the current value.", mismatch:"This is NOT a typing problem: the encrypted data on GitHub was produced with a DIFFERENT DASH_PASSPHRASE secret (secret drift between GitHub Actions and Render). An admin must set the same value in both places — see SETUP.md \"Definitive passphrase test\".", staleFile:"The live file on GitHub looks older than 2 hours — the poller may have stopped or been re-encrypted with a different secret. Check the Actions tab for 'poll-telegram'.", noData:"No positions yet. Send a live location to the bot.", loadFail:"Could not reach GitHub — check your connection. The map will retry automatically; your passphrase was kept.",
     footer:"Accuracy circles are real GPS error, not decoration.",
     generated:"updated", people:"people", m:"m", km:"km"
   },
@@ -163,7 +163,7 @@ const I18N = {
     nudgeBusy:"እባክዎ {n} ሰከንድ ይጠብቁ።",
     nudgeFail:"ሰርቨሩ አልተገኘም — የመጨረሻው አካባቢ ይታያል።",
     passHint:"አካባቢዎቹ ተመስጥረዋል። ካርታውን ለመክፈት የመግቢያ ቃሉን ያስገቡ።",
-    open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ትክክል አይደለም — ቦና ማርክ ሲል እና የቁምፊ ኮርሰር (Caps Lock) ማረጋገጥ ያስፈልጋል። በተደጋጋሚ ከአልሞ ለteam መጠየቅ አለባችሁ።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።", loadFail:"GitHub መድረስ አልተቻለም — መገናኛችሁን ያረጋግጡ። በራስ-ሰር እንደገና ይሞክራል፤ የመግቢያ ቃሉ ተጠብቋል።",
+    open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ትክክል አይደለም — ቦና ማርክ ሲል እና የቁምፊ ኮርሰር (Caps Lock) ማረጋገጥ ያስፈልጋል። በተደጋጋሚ ከአልሞ ለteam መጠየቅ አለባችሁ።", mismatch:"ይህ የእርስዎ ጥያቄ ችግር አይደለም፤ በGitHub ላይ ያለው መረጃ በተለየ DASH_PASSPHRASE ሚስጥር ተመስጥሮአል (በGitHub Actions እና Render መካከል ያለ ልዩነት)። አስተዳዳሪ በሁለቱም ቦታዎች ተመሳሳይ እሴት ማስቀመጥ አለበት።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።", loadFail:"GitHub መድረስ አልተቻለም — መገናኛችሁን ያረጋግጡ። በራስ-ሰር እንደገና ይሞክራል፤ የመግቢያ ቃሉ ተጠብቋል።",
     footer:"የትክክለኛነት ክበቦች እውነተኛ የጂፒኤስ ስህተት ናቸው።",
     generated:"የተዘመነ", people:"ሰዎች", m:"ሜ", km:"ኪ.ሜ"
   }
@@ -312,7 +312,12 @@ function toast(msg) {
 }
 
 async function load() {
-  const pass = sessionStorage.getItem("smgps_pass");
+  let pass = sessionStorage.getItem("smgps_pass");
+  if (pass && pass !== pass.trim()) {
+    // Self-heal entries stored by older builds that kept copy-paste whitespace.
+    sessionStorage.setItem("smgps_pass", pass.trim());
+    pass = pass.trim();
+  }
   if (!pass) { $("gate").classList.remove("hidden"); return; }
   try {
     const res = await fetch(`${LIVE_URL}?t=${Date.now()}`, { cache: "no-store" });
@@ -340,19 +345,22 @@ async function load() {
       return;
     }
     sessionStorage.removeItem("smgps_pass");
-    // If the encrypted file itself is stale (poller stopped, or it was re-encrypted
-    // with a DIFFERENT DASH_PASSPHRASE secret on the server), saying "Wrong
-    // passphrase" is misleading — the user's passphrase may be perfectly correct.
-    let stale = false;
+    // If the encrypted file itself is stale (poller stopped) OR freshly written by
+    // the poller but undecryptable (it was re-encrypted with a DIFFERENT
+    // DASH_PASSPHRASE secret on the server), saying "Wrong passphrase" is
+    // misleading — the user's passphrase may be perfectly correct and the problem
+    // is admin-side secret drift between GitHub Actions and Render.
+    let msgKey = "wrongPass";
     try {
       const res2 = await fetch(`${LIVE_URL}?t=${Date.now()}`, { cache: "no-store" });
       if (res2.ok) {
         const box2 = await res2.json();
         const gen = Date.parse(box2 && box2.generated || "");
-        if (!Number.isNaN(gen) && Date.now() - gen > 2 * 3600 * 1000) stale = true;
+        if (!Number.isNaN(gen) && Date.now() - gen > 2 * 3600 * 1000) msgKey = "staleFile";
+        else if (!Number.isNaN(gen)) msgKey = "mismatch"; // fresh file we cannot open => server secret differs
       }
     } catch { /* keep wrongPass message */ }
-    $("gateErr").textContent = stale ? t("staleFile") : t("wrongPass");
+    $("gateErr").textContent = t(msgKey);
     $("gateErr").style.display = "block";
     $("gate").classList.remove("hidden");
   }
@@ -493,6 +501,8 @@ $("gateForm").onsubmit = async (e) => {
   // space or newline, which AES-GCM then rejects as "Wrong passphrase".
   const pass = $("pass").value.trim();
   if (!pass) return;
+  // Store the TRIMMED value — load() reads it back directly, so a stale entry
+  // with stray whitespace would otherwise fail decryption every retry.
   sessionStorage.setItem("smgps_pass", pass);
   $("pass").value = "";
   $("gateErr").style.display = "none";
