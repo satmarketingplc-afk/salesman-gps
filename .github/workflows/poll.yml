@@ -40,9 +40,9 @@ jobs:
           for i in $(seq 1 18); do
             node scripts/poll_telegram.mjs || echo "poll failed, continuing"
 
-            # commit every third pass (~45 s) + the final one: keeps the repo small
-            # and stops GitHub Pages from rebuilding on every single ping.
-            if [ $((i % 3)) -eq 0 ] || [ "$i" -eq 18 ]; then
+            # commit every 8th pass (~2 min) + the last one: the dashboard reads through a
+            # CDN anyway, and every commit triggers a Pages/Render rebuild we don't need.
+            if [ $((i % 8)) -eq 0 ] || [ "$i" -eq 18 ]; then
               git add -A
               if ! git diff --cached --quiet; then
                 git commit -q -m "pings $(date -u +%FT%TZ)"

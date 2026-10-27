@@ -71,7 +71,30 @@ The mock only writes `dashboard/public/live.enc.json`; do not commit it over the
 
 ---
 
-## 5. Daily routine
+## 5. Hosting on Render (alongside Pages)
+
+The page is pure static files, and it reads positions from `raw.githubusercontent.com`, so
+GitHub Pages and Render can both serve it — neither one holds the data.
+
+1. Render → **New → Blueprint** → pick `satmarketingplc-afk/salesman-gps`. `render.yaml`
+   already defines the build (`_site` with `index.html`, `app/`, `dashboard/`).
+2. Or **New → Static Site** manually:
+   - Build command: `rm -rf _site && mkdir -p _site && cp index.html _site/ && cp -r app dashboard _site/`
+   - Publish directory: `_site`
+3. Open `https://<your-service>.onrender.com/` — same three doors:
+   - `/` launcher · `/dashboard/` manager map · `/app/` salesman app
+
+Optional: keep only Render and turn Pages off (Repo → Settings → Pages → Source: None).
+The Action keeps writing to GitHub either way.
+
+**Turn Render's Auto-Deploy OFF** (Settings → Build & Deploy → Auto-Deploy: No). Every poll
+commits to the repo; with auto-deploy on, Render would rebuild the static site hundreds of
+times a day and burn the free build minutes. The site does not need rebuilding for data —
+it fetches the encrypted payload from GitHub on every page load.
+
+---
+
+## 6. Daily routine
 
 - Salesman taps **Share live location → 8 hours** at the start of the shift (the app reminds him).
 - Manager opens the dashboard, types the passphrase once per browser session.
