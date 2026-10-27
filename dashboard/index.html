@@ -52,6 +52,7 @@
   .chip.on{background:#ecfdf5; color:var(--ok)}
   .chip.stale{background:#fffbeb; color:var(--warn)}
   .chip.off{background:#f1f5f9; color:var(--off)}
+  .chip.recent{background:#eff6ff; color:#1d4ed8}
   .pmeta{display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin-top:7px}
   .pmeta b{color:var(--ink); font-weight:600}
   .dist{display:inline-flex; align-items:center; gap:5px; background:#eef2ff; color:#3730a3;
@@ -60,6 +61,14 @@
   .leaflet-tooltip.pinlabel{background:rgba(15,23,42,.88); color:#fff; border:0; border-radius:6px;
     font-size:11px; font-weight:600; padding:3px 7px; box-shadow:0 2px 8px rgba(15,23,42,.25)}
   .leaflet-tooltip.pinlabel::before{display:none}
+  .toast{
+    position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(16px);
+    background:var(--ink); color:#fff; font-size:13px; line-height:1.4; padding:9px 14px;
+    border-radius:10px; max-width:min(90vw,420px); text-align:center; z-index:6000;
+    opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+  @media (max-width:820px){ .toast{bottom:16px; font-size:12px} }
   .empty{color:var(--muted); font-size:13px; line-height:1.5; padding:16px 4px}
   .gate{
     position:fixed; inset:0; background:rgba(15,23,42,.72); display:flex; align-items:center;
@@ -125,13 +134,18 @@
   </form>
 </div>
 
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
 <script>
 const I18N = {
   en: {
     title:"Salesman GPS", subtitle:"Live field positions", refresh:"Refresh",
-    salesmen:"Salesmen", lastSeen:"last seen", online:"live", stale:"stale", off:"offline",
+    salesmen:"Salesmen", lastSeen:"last seen", online:"live", stale:"stale", off:"offline", recent:"recent",
     justNow:"just now", min:"min ago", hour:"h ago", accuracy:"accuracy", battery:"battery",
     today:"today", coveredToday:"covered today", passTitle:"Passphrase",
+    nudgeSent:"Location request sent to {n}. New point appears in ~1 min.",
+    nudgeBusy:"Please wait {n}s before asking again.",
+    nudgeFail:"Could not reach the server — showing the latest saved position.",
     passHint:"The positions are encrypted. Enter the dashboard passphrase to open the map.",
     open:"Open map", wrongPass:"Wrong passphrase.", noData:"No positions yet. Send a live location to the bot.",
     footer:"Accuracy circles are real GPS error, not decoration.",
@@ -139,9 +153,12 @@ const I18N = {
   },
   am: {
     title:"የሽያጭ ሠራተኞች ካርታ", subtitle:"ቀጥታ የመስክ አቀማመጥ", refresh:"አድስ",
-    salesmen:"ሽያጭ ሠራተኞች", lastSeen:"መጨረሻ የታየው", online:"ቀጥታ", stale:"ዘግይቷል", off:"ከመስመር ውጭ",
+    salesmen:"ሽያጭ ሠራተኞች", lastSeen:"መጨረሻ የታየው", online:"ቀጥታ", stale:"ዘግይቷል", off:"ከመስመር ውጭ", recent:"አዲስ",
     justNow:"አሁን", min:"ደቂቃ በፊት", hour:"ሰዓት በፊት", accuracy:"ትክክለኛነት", battery:"ባትሪ",
     today:"ዛሬ", coveredToday:"ዛሬ የተጓዘው", passTitle:"የመግቢያ ቃል",
+    nudgeSent:"የአካባቢ ጥያቄ ወደ {n} ተልኳል። አዲሱ ነጥብ በ1 ደቂቃ ይታያል።",
+    nudgeBusy:"እባክዎ {n} ሰከንድ ይጠብቁ።",
+    nudgeFail:"ሰርቨሩ አልተገኘም — የመጨረሻው አካባቢ ይታያል።",
     passHint:"አካባቢዎቹ ተመስጥረዋል። ካርታውን ለመክፈት የመግቢያ ቃሉን ያስገቡ።",
     open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ስህተት ነው።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።",
     footer:"የትክክለኛነት ክበቦች እውነተኛ የጂፒኤስ ስህተት ናቸው።",
@@ -224,6 +241,23 @@ const LOCAL = location.protocol === "file:" || ["localhost", "127.0.0.1"].includ
 const LIVE_URL = LOCAL
   ? "public/live.enc.json"
   : "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/live.enc.json";
+
+// The hosting server (Render) answers /healthz and can ask the team for a fresh point.
+// On GitHub Pages these paths 404, so the button silently falls back to a plain reload.
+let canNudge = false;
+fetch("/healthz", { cache: "no-store" })
+  .then((r) => (r.ok ? r.json() : null))
+  .then((j) => { canNudge = j && j.service === "salesman-gps"; })
+  .catch(() => {});
+
+let toastTimer = null;
+function toast(msg) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 4500);
+}
 
 async function load() {
   const pass = sessionStorage.getItem("smgps_pass");
@@ -310,8 +344,10 @@ function render() {
   list.innerHTML = "";
   data.salesmen.forEach((p) => {
     const recent = Date.now() - Date.parse(p.ts);
-    const cls = p.live ? "on" : (recent < 15 * 60 * 1000 ? "stale" : "off");
-    const label = p.live ? t("online") : (cls === "stale" ? t("stale") : t("off"));
+    // live session > recent one-tap point > stale > offline
+    const fresh = recent < 15 * 60 * 1000;
+    const cls = p.live ? "on" : (fresh ? "recent" : "off");
+    const label = p.live ? t("online") : (fresh ? t("recent") : t("off"));
     const km = coveredKm(p).toFixed(1);
 
     const card = document.createElement("div");
@@ -336,8 +372,40 @@ function render() {
 }
 
 $("lang").onclick = () => { lang = lang === "en" ? "am" : "en"; applyLang(); };
-$("refresh").onclick = () => load();
 $("lock").onclick = () => { sessionStorage.removeItem("smgps_pass"); location.reload(); };
+
+// Refresh = "ask the team where they are now", then keep reloading for ~5 min so the
+// new point shows up by itself. Without the server (GitHub Pages) it is a plain reload.
+$("refresh").onclick = async () => {
+  if (!canNudge) return load();
+
+  const btn = $("refresh");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/nudge", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pass: sessionStorage.getItem("smgps_pass") || "" }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (out.ok) {
+      toast(t("nudgeSent").replace("{n}", out.sent.length));
+    } else if (out.error === "busy") {
+      toast(t("nudgeBusy").replace("{n}", out.retryIn || 20));
+    } else {
+      toast(t("nudgeFail"));
+    }
+  } catch {
+    toast(t("nudgeFail"));
+  } finally {
+    btn.disabled = false;
+  }
+
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 20000));
+    await load();
+  }
+};
 
 $("gateForm").onsubmit = async (e) => {
   e.preventDefault();

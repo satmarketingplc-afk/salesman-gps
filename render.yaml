@@ -1,14 +1,17 @@
 services:
   - type: web
     name: salesman-gps
-    runtime: static
-    buildCommand: rm -rf _site && mkdir -p _site && cp index.html _site/ && cp -r app dashboard _site/
-    staticPublishPath: ./_site
-    pullRequestPreviewsEnabled: false
-    headers:
-      - path: /*
-        name: X-Frame-Options
-        value: SAMEORIGIN
-      - path: /*
-        name: Referrer-Policy
-        value: no-referrer
+    runtime: node
+    plan: free
+    buildCommand: rm -rf dist && mkdir -p dist && cp index.html dist/ && cp -r app dashboard dist/
+    startCommand: node server/index.mjs
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DASH_PASSPHRASE
+        sync: false
+      # optional: fine-grained PAT (Actions: write) so Refresh starts a poll run at once
+      - key: GH_DISPATCH_TOKEN
+        sync: false
