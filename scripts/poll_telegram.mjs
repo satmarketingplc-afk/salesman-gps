@@ -79,6 +79,59 @@ const saveDay = async (code, day, pings) => {
   await writeJson(dayFile(code, day), encryptJson(pings, PASS));
 };
 
+// ---- customer cards -------------------------------------------------------
+// Salesmen file these from the Telegram Mini App (or the #CUST text fallback).
+// One encrypted file per month is the archive; customers.enc.json is the rolling
+// view the passphrase-gated Customers page reads.
+const custFile = (month) => path.join(ARCHIVE, "customers", `${month}.enc.json`);
+const monthKey = (iso) => new Date(Date.parse(iso) + EAT_MS).toISOString().slice(0, 7);
+const CUSTOMER_STAGES = ["lead", "quote", "won", "lost"];
+
+const clip = (v, n) => String(v ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, n);
+
+function customerCard(msg) {
+  if (!msg) return null;
+  if (msg.web_app_data?.data) {
+    try {
+      return JSON.parse(msg.web_app_data.data);
+    } catch {
+      return null;
+    }
+  }
+  const text = msg.text || msg.caption || "";
+  if (!text.startsWith("#CUST ")) return null;
+  try {
+    return JSON.parse(text.slice(6));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCustomer(c, msg, sm, from) {
+  const name = clip(c.name, 80);
+  if (!name) return null;
+  const lat = Number(c.lat);
+  const lng = Number(c.lng);
+  const qty = Number(c.qty);
+  return {
+    id: clip(c.id, 40) || `${from.id}-${msg.message_id}`,
+    ts: new Date((msg.edit_date || msg.date) * 1000).toISOString(),
+    by: sm.code,
+    byName: sm.name,
+    byColor: sm.color || "",
+    name,
+    phone: clip(c.phone, 32),
+    biz: clip(c.biz, 60),
+    product: clip(c.product, 40),
+    qty: Number.isFinite(qty) && qty > 0 ? qty : null,
+    stage: CUSTOMER_STAGES.includes(c.stage) ? c.stage : "lead",
+    lat: Number.isFinite(lat) ? Number(lat.toFixed(6)) : null,
+    lng: Number.isFinite(lng) ? Number(lng.toFixed(6)) : null,
+    note: clip(c.note, 300),
+    tg: String(from.id),
+  };
+}
+
 async function loadRoster() {
   const box = await readJson(ROSTER_FILE, null);
   if (box) {
@@ -132,16 +185,56 @@ async function main() {
   const dirty = new Set();
   const unmapped = (await readJson(path.join(ARCHIVE, "unmapped.enc.json"), null)) || [];
 
+  const custMonths = new Map(); // month -> decrypted entries, loaded lazily
+  const newCustomers = [];
+
   for (const u of updates) {
     nextOffset = Math.max(nextOffset, u.update_id + 1);
     const msg = u.edited_message || u.message;
-    const loc = msg && msg.location;
-    if (!loc) continue;
-
-    const from = msg.from || {};
+    const from = msg?.from || {};
     const sm =
       byTg.get(String(from.id)) ||
       (from.username ? byUser.get(String(from.username).toLowerCase()) : undefined);
+
+    // ---- customer card: Telegram Mini App payload or the #CUST text fallback ----
+    const card = customerCard(msg);
+    if (card) {
+      if (!sm) {
+        skipped++;
+        continue;
+      }
+      const entry = normalizeCustomer(card, msg, sm, from);
+      if (!entry) {
+        skipped++;
+        continue;
+      }
+      const month = monthKey(entry.ts);
+      if (!custMonths.has(month)) {
+        const file = custFile(month);
+        const box = await readJson(file, null);
+        let list = [];
+        if (box) {
+          try {
+            list = decryptJson(box, PASS);
+          } catch {
+            fail(`cannot decrypt ${file} — wrong DASH_PASSPHRASE?`);
+          }
+        }
+        custMonths.set(month, list);
+      }
+      const list = custMonths.get(month);
+      if (list.some((c) => c.id === entry.id)) {
+        skipped++;
+        continue;
+      }
+      list.push(entry);
+      newCustomers.push(entry);
+      stored++;
+      continue;
+    }
+
+    const loc = msg && msg.location;
+    if (!loc) continue;
 
     const ts = new Date((msg.edit_date || msg.date) * 1000).toISOString();
     const ping = {
@@ -181,6 +274,37 @@ async function main() {
     await saveDay(sm.code, day, pings);
     dirty.add(sm.code);
     stored++;
+  }
+
+  // persist the month files once per pass, then refresh the rolling view the page reads
+  for (const [month, list] of custMonths) {
+    list.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    await writeJson(custFile(month), encryptJson(list, PASS));
+  }
+
+  if (newCustomers.length) {
+    const file = path.join(OUT_DIR, "customers.enc.json");
+    const box = await readJson(file, null);
+    let view = { generated: null, entries: [] };
+    if (box) {
+      try {
+        view = decryptJson(box, PASS);
+      } catch {
+        // unreadable payload: the month files stay the source of truth, rebuild from this batch
+      }
+    }
+    const known = new Set((view.entries || []).map((c) => c.id));
+    const fresh = newCustomers.filter((c) => !known.has(c.id)).reverse();
+    view = {
+      generated: new Date().toISOString(),
+      // the whole team rides along so the management board can show everyone at once,
+      // including salesmen with zero cards
+      team: (roster.salesmen || [])
+        .filter((s) => s.active !== false)
+        .map((s) => ({ code: s.code, name: s.name, nameAm: s.nameAm || s.name, color: s.color || "" })),
+      entries: [...fresh, ...(view.entries || [])].slice(0, 1000),
+    };
+    await writeJson(file, encryptJson(view, PASS));
   }
 
   if (unmapped.length) {
@@ -252,7 +376,8 @@ async function main() {
 
   console.log(
     `[poller] updates=${updates.length} stored=${stored} skipped=${skipped} ` +
-      `people=${live.length} dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
+      `cards=${newCustomers.length} people=${live.length} ` +
+      `dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
   );
 }
 

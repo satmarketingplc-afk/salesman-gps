@@ -8,6 +8,7 @@ off for up to 8 hours.
 - **Store:** a GitHub repo, encrypted, one file per salesman per day
 - **Live view:** encrypted file in the repo, decrypted in the browser
 - **Reports:** `/reports/` — daily km, first/last seen, points, CSV export
+- **Customers:** `/app/customer/` form inside Telegram → `/customers/` team board + CSV
 - **Hosting:** GitHub Pages (static, zero servers); optional Render service only for the "ask for a location" button
 - **Server:** none. One GitHub Action that re-triggers itself.
 
@@ -38,5 +39,8 @@ python -m http.server 8080
 | `scripts/mock_live.mjs` | fake 3-person feed for the dashboard |
 | `data/salesmen.json` | roster template (real one lives in the private repo) |
 | `app/index.html` | salesman app: shift timer, 3-step share guide, EN/አማርኛ, installable |
+| `app/customer/index.html` | customer card Mini App (Telegram menu button) |
+| `customers/index.html` | management board: one column per salesman, CSV |
+| `scripts/set_bot_menu.mjs` | points the bot's menu button at the customer form |
 | `dashboard/index.html` | map, list, EN/አማርኛ, passphrase gate |
 | `.github/workflows/poll.yml` | 5-minute cron, 4.5-minute polling loop |

@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Customers — Salesman GPS</title>
+<style>
+  :root{
+    --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc;
+    --green:#0b3b2e; --mint:#34d399; --ok:#059669; --warn:#d97706; --off:#94a3b8; --red:#dc2626;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink); min-height:100vh;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Ethiopic",sans-serif;
+    display:flex; flex-direction:column;
+  }
+  header{
+    display:flex; align-items:center; gap:10px; padding:12px 18px;
+    background:var(--ink); color:#fff; flex-wrap:wrap;
+  }
+  .brand{display:flex; flex-direction:column; margin-right:auto; line-height:1.15}
+  .brand b{font-size:16px; letter-spacing:.2px}
+  .brand span{font-size:12px; color:#cbd5e1}
+  .hbtn{
+    background:rgba(255,255,255,.1); color:#fff; border:1px solid rgba(255,255,255,.18);
+    border-radius:9px; padding:8px 12px; font-size:13px; cursor:pointer; text-decoration:none;
+    min-height:38px; display:inline-flex; align-items:center;
+  }
+  .hbtn:hover{background:rgba(255,255,255,.18)}
+
+  main{padding:18px; display:flex; flex-direction:column; gap:14px; max-width:1500px; width:100%; margin:0 auto}
+  .cards{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px}
+  .card{background:#fff; border:1px solid var(--line); border-radius:12px; padding:14px}
+  .card b{display:block; font-size:22px; line-height:1.2}
+  .card span{font-size:12px; color:var(--muted)}
+
+  /* team strip: every salesman at a glance, one click to focus */
+  .team{display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px}
+  .tcard{
+    display:flex; align-items:center; gap:9px; text-align:left; cursor:pointer;
+    background:#fff; border:1px solid var(--line); border-radius:12px; padding:10px 12px;
+    font-family:inherit; color:var(--ink); min-width:0;
+  }
+  .tcard:hover{border-color:#cbd5e1}
+  .tcard.on{border-color:var(--mint); box-shadow:0 0 0 2px #d1fae5 inset; background:#f0fdf7}
+  .tcard .dot{width:10px; height:10px; border-radius:50%; flex:none}
+  .tcard .tn{font-weight:700; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .tcard .ts{font-size:11.5px; color:var(--muted); margin-left:auto; white-space:nowrap}
+
+  .toolbar{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .toolbar input{
+    flex:1; min-width:190px; padding:10px 12px; border:1px solid var(--line);
+    border-radius:10px; font-size:14px; background:#fff;
+  }
+  .fchip{
+    border:1px solid var(--line); background:#fff; color:var(--muted); border-radius:999px;
+    padding:8px 12px; font-size:13px; cursor:pointer; font-family:inherit;
+  }
+  .fchip.on{background:var(--green); border-color:var(--green); color:#fff; font-weight:600}
+  .vchip{
+    border:1px solid var(--line); background:#fff; color:var(--muted); border-radius:10px;
+    padding:8px 11px; font-size:13px; cursor:pointer; font-family:inherit;
+  }
+  .vchip.on{background:#e8f5ef; border-color:var(--mint); color:var(--green); font-weight:600}
+  .sep{width:1px; height:24px; background:var(--line); margin:0 3px}
+  #status{font-size:12px; color:var(--muted); margin-left:auto}
+
+  /* list view */
+  .day{background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden}
+  .day h2{
+    margin:0; padding:11px 14px; font-size:13px; background:#f1f5f9;
+    display:flex; justify-content:space-between; gap:10px; color:var(--ink); font-weight:600;
+  }
+  .day h2 small{font-weight:500; color:var(--muted)}
+
+  /* board view: one column per salesman, all of them on screen */
+  .board{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px; align-items:start}
+  .col{background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden; min-width:0}
+  .colhead{
+    display:flex; align-items:center; gap:8px; padding:10px 12px; background:#f1f5f9;
+    border-bottom:1px solid var(--line);
+  }
+  .colhead .dot{width:10px; height:10px; border-radius:50%; flex:none}
+  .colhead b{font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .colhead small{font-size:11.5px; color:var(--muted); margin-left:auto; white-space:nowrap}
+  .colbody{max-height:min(64vh,720px); overflow:auto}
+  .col .empty{background:none; border:0; border-radius:0}
+
+  .entry{padding:12px 14px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:5px}
+  .entry:first-child{border-top:0}
+  .entry .line1{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .entry .nm{font-size:14.5px; font-weight:700}
+  .entry .biz{font-size:12px; color:var(--muted)}
+  .entry .phone{font-size:13.5px; color:#1d4ed8; text-decoration:none; font-variant-numeric:tabular-nums}
+  .entry .prod{font-size:12.5px; color:#334155}
+  .entry .note{font-size:12px; color:var(--muted); line-height:1.45}
+  .entry .meta{display:flex; gap:10px; flex-wrap:wrap; font-size:11px; color:var(--off); align-items:center}
+  .entry .meta a{color:#1d4ed8; text-decoration:none}
+  .pill{font-size:10.5px; padding:2px 8px; border-radius:999px; font-weight:600; white-space:nowrap}
+  .pill.lead{background:#eef2f7; color:#475569}
+  .pill.quote{background:#fef3c7; color:#b45309}
+  .pill.won{background:#d1fae5; color:#047857}
+  .pill.lost{background:#fee2e2; color:#b91c1c}
+  .empty{color:var(--muted); font-size:12.5px; padding:16px; text-align:center}
+  .emptybox{color:var(--muted); font-size:13px; padding:20px; background:#fff; border:1px solid var(--line); border-radius:12px; text-align:center}
+
+  footer{
+    margin-top:auto; display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    padding:10px 18px; border-top:1px solid var(--line); font-size:12px; color:var(--muted);
+  }
+
+  .gate{
+    position:fixed; inset:0; background:rgba(15,23,42,.72); display:flex; align-items:center;
+    justify-content:center; padding:20px; z-index:9999;
+  }
+  .gate.hidden{display:none}
+  .gate form{background:#fff; border-radius:16px; padding:22px; width:100%; max-width:360px}
+  .gate h2{margin:0 0 4px; font-size:18px}
+  .gate p{margin:0 0 14px; font-size:13px; color:var(--muted); line-height:1.5}
+  .gate input{width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px; font-size:15px; margin-bottom:10px}
+  .gate .err{color:#dc2626; font-size:13px; margin-bottom:10px; background:#fef2f2; padding:8px 10px; border-radius:8px}
+  .gate button{width:100%; padding:11px; border:0; border-radius:10px; background:var(--ink); color:#fff; font-size:15px; cursor:pointer}
+
+  @media (max-width:820px){
+    .cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+    header{padding:10px 12px}
+    main{padding:12px}
+    .brand span{display:none}
+    .colbody{max-height:none}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <b>Salesman GPS</b>
+    <span data-i18n="subtitle">Customer cards</span>
+  </div>
+  <a class="hbtn" href="../dashboard/">← <span data-i18n="map">Map</span></a>
+  <a class="hbtn" href="../app/customer/" data-i18n="add">＋ Customer</a>
+  <button class="hbtn" id="lang">አማርኛ</button>
+  <button class="hbtn" id="csv" data-i18n="csv">CSV</button>
+  <button class="hbtn" id="refresh" data-i18n="refresh">Refresh</button>
+</header>
+
+<main>
+  <section class="cards" id="cards"></section>
+  <section class="team" id="team"></section>
+  <div class="toolbar">
+    <input id="q" data-i18n-ph="search" placeholder="Search name, phone, shop" />
+    <button class="fchip on" data-f="all" data-i18n="all">All</button>
+    <button class="fchip" data-f="lead" data-i18n="lead">Lead</button>
+    <button class="fchip" data-f="quote" data-i18n="quote">Quoted</button>
+    <button class="fchip" data-f="won" data-i18n="won">Won</button>
+    <button class="fchip" data-f="lost" data-i18n="lost">Lost</button>
+    <span class="sep"></span>
+    <button class="vchip" data-v="board" data-i18n="board">Board</button>
+    <button class="vchip" data-v="list" data-i18n="list">List</button>
+    <span id="status"></span>
+  </div>
+  <div id="list"></div>
+</main>
+
+<footer>
+  <span id="generated">—</span>
+  <span data-i18n="note">Encrypted on GitHub. Visible only with the passphrase.</span>
+</footer>
+
+<div class="gate" id="gate">
+  <form id="gateForm">
+    <h2 data-i18n="passTitle">Passphrase</h2>
+    <p data-i18n="passHint">Customer cards are encrypted. Enter the dashboard passphrase.</p>
+    <div class="err" id="gateErr" style="display:none"></div>
+    <input id="pass" type="password" autocomplete="current-password" placeholder="••••••••" />
+    <button type="submit" data-i18n="open">Open customers</button>
+  </form>
+</div>
+
+<script>
+const I18N = {
+  en: {
+    subtitle:"Customer cards", map:"Map", add:"＋ Customer", csv:"CSV", refresh:"Refresh",
+    search:"Search name, phone, shop", all:"All", lead:"Lead", quote:"Quoted", won:"Won", lost:"Lost",
+    board:"Board", list:"List",
+    passTitle:"Passphrase", passHint:"Customer cards are encrypted. Enter the dashboard passphrase.",
+    open:"Open customers", wrongPass:"Wrong passphrase.", noData:"No customer cards yet.",
+    total:"customers", month:"this month", wonCount:"won", value:"with location",
+    generated:"updated", note:"Encrypted on GitHub. Visible only with the passphrase.",
+    salesman:"by", mapLink:"map", qty:"qty", today:"Today", yesterday:"Yesterday",
+    cards:"cards", noCards:"No cards yet", last:"last", allTeam:"Whole team", filterClear:"Clear filter"
+  },
+  am: {
+    subtitle:"የደንበኞች ካርዶች", map:"ካርታ", add:"＋ ደንበኛ", csv:"CSV", refresh:"አድስ",
+    search:"ስም፣ ስልክ ወይም ሱቅ ይፈልጉ", all:"ሁሉም", lead:"አዲስ", quote:"ዋጋ ተሰጥቷል", won:"ተሸጠ", lost:"አልተሸጠም",
+    board:"ሰሌዳ", list:"ዝርዝር",
+    passTitle:"የመግቢያ ቃል", passHint:"የደንበኞች ካርዶች ተመስጥረዋል። የካርታውን የመግቢያ ቃል ያስገቡ።",
+    open:"ደንበኞችን ክፈት", wrongPass:"የመግቢያ ቃሉ ስህተት ነው።", noData:"እስካሁን የደንበኛ ካርድ የለም።",
+    total:"ደንበኞች", month:"በዚህ ወር", wonCount:"ተሸጠ", value:"አካባቢ ያለው",
+    generated:"የተዘመነ", note:"በGitHub ላይ ተመስጥሯል። በመግቢያ ቃል ብቻ ይታያል።",
+    salesman:"በ", mapLink:"ካርታ", qty:"ብዛት", today:"ዛሬ", yesterday:"ትናንት",
+    cards:"ካርዶች", noCards:"እስካሁን ካርድ የለም", last:"መጨረሻ", allTeam:"ሙሉ ቡድን", filterClear:"ማጣሪያውን አጽዳ"
+  }
+};
+let lang = localStorage.getItem("smgps_lang") || "en";
+const t = (k) => (I18N[lang][k] ?? I18N.en[k] ?? k);
+const $ = (id) => document.getElementById(id);
+
+let data = null;
+let query = "";
+let filter = "all";
+let teamFilter = "";              // salesman code, "" = whole team
+let view = localStorage.getItem("smgps_cust_view") || (window.innerWidth >= 1000 ? "board" : "list");
+
+function b64(buf) {
+  return Uint8Array.from(atob(buf), (c) => c.charCodeAt(0));
+}
+
+async function decrypt(payload, passphrase) {
+  const enc = new TextEncoder();
+  const base = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64(payload.salt), iterations: payload.iter, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
+  );
+  const ct = b64(payload.ct);
+  const tag = b64(payload.tag);
+  const both = new Uint8Array(ct.length + tag.length);
+  both.set(ct); both.set(tag, ct.length);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(payload.iv), tagLength: 128 }, key, both);
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+const LOCAL = location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
+const DATA_URL = LOCAL
+  ? "../dashboard/public/customers.enc.json"
+  : "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/customers.enc.json";
+
+const escapeHtml = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+
+const PALETTE = ["#2563eb", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d", "#dc2626"];
+const localDate = (iso) => new Date(Date.parse(iso) + 3 * 3600 * 1000).toISOString().slice(0, 10);
+const dayLabel = (day) => {
+  const today = localDate(new Date().toISOString());
+  const yest = localDate(new Date(Date.now() - 86400000).toISOString());
+  if (day === today) return t("today");
+  if (day === yest) return t("yesterday");
+  return new Date(`${day}T12:00:00Z`).toLocaleDateString(lang === "am" ? "am-ET" : "en-GB", {
+    weekday:"short", day:"numeric", month:"short", year:"numeric", timeZone:"UTC" });
+};
+const hhmm = (iso) =>
+  new Date(iso).toLocaleTimeString("en-GB", { timeZone:"Africa/Addis_Ababa", hour:"2-digit", minute:"2-digit" });
+const cardsLabel = (n) => (lang === "am" ? `${n} ${t("cards")}` : `${n} card${n === 1 ? "" : "s"}`);
+
+async function load() {
+  const pass = sessionStorage.getItem("smgps_pass");
+  if (!pass) { $("gate").classList.remove("hidden"); return; }
+  try {
+    const res = await fetch(`${DATA_URL}?t=${Date.now()}`, { cache: "no-store" });
+    if (res.status === 404) {
+      data = { generated: new Date().toISOString(), team: [], entries: [] };
+      $("gate").classList.add("hidden");
+      render();
+      return;
+    }
+    if (!res.ok) throw new Error(`http ${res.status}`);
+    data = await decrypt(await res.json(), pass);
+    $("gate").classList.add("hidden");
+    $("generated").textContent = `${t("generated")} ${new Date(data.generated).toLocaleTimeString("en-GB", { timeZone:"Africa/Addis_Ababa" })} EAT`;
+    render();
+  } catch (err) {
+    sessionStorage.removeItem("smgps_pass");
+    $("gateErr").textContent = t("wrongPass");
+    $("gateErr").style.display = "block";
+    $("gate").classList.remove("hidden");
+  }
+}
+
+function team() {
+  const list = (data?.team || []).slice();
+  if (list.length) return list;
+  // older payloads: rebuild the team from the cards themselves
+  const seen = new Map();
+  for (const c of data?.entries || []) {
+    if (!seen.has(c.by)) seen.set(c.by, { code: c.by, name: c.byName || c.by, nameAm: c.byName || c.by, color: c.byColor || "" });
+  }
+  return [...seen.values()];
+}
+
+function colorFor(code) {
+  const t0 = team().find((s) => s.code === code);
+  if (t0?.color) return t0.color;
+  const i = Math.max(0, team().findIndex((s) => s.code === code));
+  return PALETTE[i % PALETTE.length];
+}
+
+function visible() {
+  const q = query.trim().toLowerCase();
+  return (data?.entries || []).filter((c) => {
+    if (filter !== "all" && c.stage !== filter) return false;
+    if (teamFilter && c.by !== teamFilter) return false;
+    if (!q) return true;
+    return `${c.name} ${c.phone} ${c.biz} ${c.product} ${c.note} ${c.byName} ${c.by}`
+      .toLowerCase().includes(q);
+  });
+}
+
+function render() {
+  const all = data?.entries || [];
+  const month = localDate(new Date().toISOString()).slice(0, 7);
+  $("cards").innerHTML = `
+    <div class="card"><b>${all.length}</b><span>${t("total")}</span></div>
+    <div class="card"><b>${all.filter((c) => localDate(c.ts).slice(0, 7) === month).length}</b><span>${t("month")}</span></div>
+    <div class="card"><b>${all.filter((c) => c.stage === "won").length}</b><span>${t("wonCount")}</span></div>
+    <div class="card"><b>${all.filter((c) => c.lat != null).length}</b><span>${t("value")}</span></div>`;
+
+  renderTeam();
+
+  document.querySelectorAll(".vchip").forEach((b) => b.classList.toggle("on", b.dataset.v === view));
+
+  const rows = visible();
+  $("status").textContent = rows.length ? `${rows.length} / ${all.length}` : "";
+  if (!all.length) {
+    $("list").innerHTML = `<div class="emptybox">${t("noData")}</div>`;
+    return;
+  }
+  $("list").innerHTML = view === "board" ? renderBoard() : renderList(rows);
+}
+
+function renderTeam() {
+  const people = team();
+  if (!people.length) { $("team").innerHTML = ""; return; }
+  $("team").innerHTML = people
+    .map((s) => {
+      const mine = (data?.entries || []).filter((c) => c.by === s.code);
+      const last = mine[0]?.ts;
+      const won = mine.filter((c) => c.stage === "won").length;
+      return `<button class="tcard${teamFilter === s.code ? " on" : ""}" data-by="${escapeHtml(s.code)}"
+        title="${teamFilter === s.code ? escapeHtml(t("filterClear")) : escapeHtml(t("allTeam"))}">
+        <span class="dot" style="background:${escapeHtml(s.color || colorFor(s.code))}"></span>
+        <span class="tn">${escapeHtml(lang === "am" ? s.nameAm || s.name : s.name)}</span>
+        <span class="ts">${cardsLabel(mine.length)}${won ? ` · ${won} ${t("wonCount")}` : ""}${
+          last ? ` · ${t("last")} ${hhmm(last)}` : ""
+        }</span>
+      </button>`;
+    })
+    .join("");
+}
+
+function renderList(rows) {
+  const groups = new Map();
+  for (const c of rows) {
+    const d = localDate(c.ts);
+    if (!groups.has(d)) groups.set(d, []);
+    groups.get(d).push(c);
+  }
+  return [...groups.entries()]
+    .map(
+      ([day, items]) => `
+      <section class="day">
+        <h2><span>${dayLabel(day)}</span><small>${items.length} ${t("total")}</small></h2>
+        ${items.map((c) => cardHtml(c, true)).join("")}
+      </section>`
+    )
+    .join("");
+}
+
+function renderBoard() {
+  const people = team().filter((s) => !teamFilter || s.code === teamFilter);
+  return `<section class="board">${people
+    .map((s) => {
+      const mine = visible().filter((c) => c.by === s.code);
+      const won = mine.filter((c) => c.stage === "won").length;
+      return `<div class="col">
+        <div class="colhead">
+          <span class="dot" style="background:${escapeHtml(s.color || colorFor(s.code))}"></span>
+          <b>${escapeHtml(lang === "am" ? s.nameAm || s.name : s.name)}</b>
+          <small>${cardsLabel(mine.length)}${won ? ` · ${won} ${t("wonCount")}` : ""}</small>
+        </div>
+        <div class="colbody">${mine.length ? mine.map((c) => cardHtml(c, false)).join("") : `<div class="empty">${t("noCards")}</div>`}</div>
+      </div>`;
+    })
+    .join("")}</section>`;
+}
+
+function cardHtml(c, withSalesman) {
+  const map = c.lat != null && c.lng != null
+    ? `<a href="https://www.google.com/maps?q=${c.lat},${c.lng}" target="_blank" rel="noopener">${t("mapLink")} ↗</a>`
+    : "";
+  const phone = c.phone ? `<a class="phone" href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>` : "";
+  const qty = c.qty ? ` · ${t("qty")} ${c.qty}` : "";
+  return `
+    <article class="entry">
+      <div class="line1">
+        <span class="nm">${escapeHtml(c.name)}</span>
+        <span class="pill ${escapeHtml(c.stage)}">${t(c.stage)}</span>
+        ${phone}
+      </div>
+      ${c.biz ? `<div class="biz">${escapeHtml(c.biz)}</div>` : ""}
+      <div class="prod">${escapeHtml(c.product || "—")}${qty}</div>
+      ${c.note ? `<div class="note">${escapeHtml(c.note)}</div>` : ""}
+      <div class="meta">
+        <span>${hhmm(c.ts)}</span>
+        ${withSalesman ? `<span>${t("salesman")} ${escapeHtml(c.byName || c.by)}</span>` : ""}
+        ${map}
+      </div>
+    </article>`;
+}
+
+function csv() {
+  const rows = visible();
+  if (!rows.length) return;
+  const lines = ["date,time,salesman,customer,phone,shop,product,qty,stage,note,lat,lng"];
+  const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  for (const c of rows.slice().reverse()) {
+    lines.push([
+      localDate(c.ts), hhmm(c.ts), q(c.byName || c.by), q(c.name), q(c.phone), q(c.biz),
+      q(c.product), c.qty ?? "", c.stage, q(c.note), c.lat ?? "", c.lng ?? "",
+    ].join(","));
+  }
+  const blob = new Blob(["\ufeff" + lines.join("\n") + "\n"], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `salesman-gps-customers-${localDate(new Date().toISOString())}${teamFilter ? "-" + teamFilter : ""}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function applyLang() {
+  document.documentElement.lang = lang === "am" ? "am" : "en";
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const k = el.getAttribute("data-i18n");
+    if (I18N[lang][k]) el.textContent = I18N[lang][k];
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+    const k = el.getAttribute("data-i18n-ph");
+    if (I18N[lang][k]) el.placeholder = I18N[lang][k];
+  });
+  $("lang").textContent = lang === "am" ? "English" : "አማርኛ";
+  localStorage.setItem("smgps_lang", lang);
+  if (data) render();
+}
+
+$("lang").onclick = () => { lang = lang === "en" ? "am" : "en"; applyLang(); };
+$("refresh").onclick = () => load();
+$("csv").onclick = () => csv();
+$("q").oninput = (e) => { query = e.target.value; render(); };
+document.querySelectorAll(".fchip").forEach((b) =>
+  b.addEventListener("click", () => {
+    filter = b.dataset.f;
+    document.querySelectorAll(".fchip").forEach((x) => x.classList.toggle("on", x === b));
+    render();
+  })
+);
+document.querySelectorAll(".vchip").forEach((b) =>
+  b.addEventListener("click", () => {
+    view = b.dataset.v;
+    localStorage.setItem("smgps_cust_view", view);
+    render();
+  })
+);
+$("team").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-by]");
+  if (!b) return;
+  teamFilter = teamFilter === b.dataset.by ? "" : b.dataset.by;
+  render();
+});
+
+$("gateForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const pass = $("pass").value;
+  if (!pass) return;
+  sessionStorage.setItem("smgps_pass", pass);
+  $("gateErr").style.display = "none";
+  await load();
+};
+
+window.SMGPS = { render, visible, setView: (v) => { view = v; render(); }, teamFilter: (c) => { teamFilter = c; render(); }, dataRef: () => data };
+applyLang();
+load();
+</script>
+</body>
+</html>

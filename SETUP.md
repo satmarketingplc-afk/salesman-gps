@@ -15,6 +15,9 @@ One repo. One bot. Two secrets. About 10 minutes — and I already did the repo 
 | Launcher | `https://satmarketingplc-afk.github.io/salesman-gps/` |
 | Manager map | `.../dashboard/` |
 | Salesman app | `.../app/` |
+| Customer form | `.../app/customer/` (Telegram menu button) |
+| Customer archive | `archive/customers/YYYY-MM.enc.json` |
+| Customers page | `.../customers/` (passphrase) |
 | Registered | `SM-001 SAT` · tg `8973058282` · red |
 
 > The dashboard passphrase is **not** stored in this repository (it is public). It lives only in
@@ -165,7 +168,42 @@ day started, so the line and the `km` figure describe the same walk.
 
 ---
 
-## 8. Keeping it free
+## 8. Customer cards
+
+Salesmen save customers from inside Telegram — no extra app, no token on the phone.
+
+1. The salesman opens the bot and taps the **menu button** ("New customer", bottom of the chat).
+   A form opens inside Telegram: name, phone, shop, product, quantity, status, note.
+2. **Save** → the card goes back to the bot, the form closes.
+3. The poller writes it within ~2 minutes to:
+   - `archive/customers/YYYY-MM.enc.json` — the encrypted archive, one file per month;
+   - `dashboard/public/customers.enc.json` — the rolling view the management page reads.
+
+Management page: `/customers/` — same passphrase as the map.
+
+- **Board** (default on desktop): one column per salesman, the whole team on screen at once,
+  including salesmen with no cards yet. Click a name to focus him, click again for the team.
+- **List**: day-by-day timeline.
+- Search (name, phone, shop, note), status filter (lead / quoted / won / lost), **CSV** export.
+- Phone numbers are tap-to-call; cards saved with GPS have a **map** link.
+
+The Telegram menu button is set once with:
+
+```powershell
+$env:TELEGRAM_BOT_TOKEN="..."
+node scripts/set_bot_menu.mjs
+```
+
+If the form is opened in a plain browser (outside Telegram), Save copies the card text and
+opens the bot — the salesman pastes and sends. The poller accepts that `#CUST {...}` message
+too, so the form is never a dead end.
+
+Privacy: the card travels through the salesman's private bot chat, then lives encrypted in the
+repo. The page is public but unreadable without the passphrase.
+
+---
+
+## 9. Keeping it free
 
 GitHub is free for this repo **because it is public**: Actions minutes are unlimited for
 public repos and Pages costs nothing. A private repo would burn the 2,000 free minutes in
