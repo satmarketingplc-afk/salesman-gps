@@ -194,6 +194,19 @@ $env:TELEGRAM_BOT_TOKEN="..."
 node scripts/set_bot_menu.mjs
 ```
 
+### What the bot says
+
+- **/start** or **/help** → a bilingual welcome with the two steps and a **New customer**
+  button. Someone who is not in the roster gets his own Telegram id to send to the office.
+- **Every saved card** → `✅ Abebe Trading — Quoted · ዋጋ ተሰጥቷል` plus whether the location
+  was attached, so the salesman knows it landed. Replies arrive with the next poll pass
+  (0–4 min), not instantly.
+- The command list, short description and description are set by the same script. One
+  welcome per person per hour, and replayed updates never double-send.
+
+The bot is a capture channel, not a chatbot: it does not answer questions, and it cannot
+force a live location (Telegram does not allow that).
+
 If the form is opened in a plain browser (outside Telegram), Save copies the card text and
 opens the bot — the salesman pastes and sends. The poller accepts that `#CUST {...}` message
 too, so the form is never a dead end.

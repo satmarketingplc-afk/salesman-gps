@@ -28,6 +28,9 @@ const EAT_MS = 3 * 3600 * 1000;
 const ONLINE_MS = Number(process.env.ONLINE_MS || 10 * 60 * 1000);
 const TRAIL_POINTS = 3000;
 const MIN_MOVE_M = 8;
+const API = process.env.TELEGRAM_API_BASE || "https://api.telegram.org";
+const CUSTOMER_URL =
+  process.env.CUSTOMER_URL || "https://satmarketingplc-afk.github.io/salesman-gps/app/customer/";
 
 if (!TOKEN) fail("TELEGRAM_BOT_TOKEN is not set");
 if (PASS.length < 8) fail("DASH_PASSPHRASE must be at least 8 characters");
@@ -36,6 +39,50 @@ function fail(msg) {
   console.error(`[poller] ${msg}`);
   process.exit(1);
 }
+
+async function tg(method, payload) {
+  try {
+    const res = await fetch(`${API}/bot${TOKEN}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!body.ok) console.warn(`[poller] ${method}: ${body.description || res.status}`);
+    return body.ok;
+  } catch (err) {
+    console.warn(`[poller] ${method}: ${err.message}`);
+    return false;
+  }
+}
+
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]));
+
+const STAGE_LABEL = {
+  lead: "New lead · አዲስ",
+  quote: "Quoted · ዋጋ ተሰጥቷል",
+  won: "Won · ተሸጠ",
+  lost: "Lost · አልተሸጠም",
+};
+
+function welcomeText() {
+  return [
+    "👋 <b>Salesman GPS</b>",
+    "1 · Share live location: 📎 → Location → <b>Share Live Location</b> → 8 hours.",
+    "2 · New customer: tap the button below (or the menu button).",
+    "────────",
+    "1 · ቀጥታ አካባቢ ያጋሩ: 📎 → አካባቢ → <b>ቀጥታ አካባቢ</b> → 8 ሰዓት።",
+    "2 · አዲስ ደንበኛ: ከታች ያለውን ቁልፍ ይጫኑ።",
+  ].join("\n");
+}
+
+const welcomeKeyboard = {
+  inline_keyboard: [
+    [{ text: "🧾 New customer · አዲስ ደንበኛ", web_app: { url: CUSTOMER_URL } }],
+  ],
+};
 
 const readJson = async (file, fallback) => {
   try {
@@ -158,6 +205,14 @@ async function main() {
   const stateFile = path.join(ARCHIVE, "state", "offset.json");
   const state = await readJson(stateFile, { offset: 0 });
 
+  // one welcome per person per hour: the offset is committed hourly, so a fresh run
+  // replays the same updates and must not answer them again
+  const repliesFile = path.join(ARCHIVE, "state", "replies.json");
+  const replies = await readJson(repliesFile, {});
+  let repliesDirty = false;
+  let replied = 0;
+  const canReply = (id) => Date.now() - Date.parse(replies[id] || 0) > 60 * 60 * 1000;
+
   // Drain up to 5 batches of 100 per pass. The offset is only committed together with the
   // archive (once an hour), so a fresh run must be able to catch up on an hour of updates
   // without falling behind.
@@ -196,6 +251,35 @@ async function main() {
       byTg.get(String(from.id)) ||
       (from.username ? byUser.get(String(from.username).toLowerCase()) : undefined);
 
+    // ---- /start and /help: tell people what the bot is for ----
+    const cmd = (msg?.text || "").trim();
+    if (/^\/(start|help)(@\w+)?(\s|$)/.test(cmd)) {
+      const id = String(from.id);
+      if (canReply(id)) {
+        replies[id] = new Date().toISOString();
+        repliesDirty = true;
+        replied++;
+        if (sm) {
+          await tg("sendMessage", {
+            chat_id: from.id,
+            text: welcomeText(),
+            parse_mode: "HTML",
+            reply_markup: welcomeKeyboard,
+          });
+        } else {
+          await tg("sendMessage", {
+            chat_id: from.id,
+            text:
+              `You are not registered yet.\nSend this number to the office: <code>${id}</code>\n` +
+              `────────\nእስካሁን አልተመዘገቡም። ይህን ቁጥር ለቢሮው ይላኩ፡ <code>${id}</code>`,
+            parse_mode: "HTML",
+          });
+        }
+      }
+      skipped++;
+      continue;
+    }
+
     // ---- customer card: Telegram Mini App payload or the #CUST text fallback ----
     const card = customerCard(msg);
     if (card) {
@@ -230,6 +314,16 @@ async function main() {
       list.push(entry);
       newCustomers.push(entry);
       stored++;
+      replied++;
+      await tg("sendMessage", {
+        chat_id: from.id,
+        text:
+          `✅ <b>${esc(entry.name)}</b> — ${STAGE_LABEL[entry.stage]}\n` +
+          (entry.lat != null ? "📍 location attached · አካባቢ ተያዘ" : "no GPS · አካባቢ የለም") +
+          `\nSaved to the office archive · ተቀምጧል`,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "🧾 Another · ሌላ", web_app: { url: CUSTOMER_URL } }]] },
+      });
       continue;
     }
 
@@ -374,9 +468,15 @@ async function main() {
   if (builtReports) nextState.lastArchive = new Date().toISOString();
   await writeJson(stateFile, nextState);
 
+  if (repliesDirty) {
+    const cutoff = Date.now() - 7 * 86400000;
+    for (const [k, v] of Object.entries(replies)) if (Date.parse(v) < cutoff) delete replies[k];
+    await writeJson(repliesFile, replies);
+  }
+
   console.log(
     `[poller] updates=${updates.length} stored=${stored} skipped=${skipped} ` +
-      `cards=${newCustomers.length} people=${live.length} ` +
+      `cards=${newCustomers.length} replied=${replied} people=${live.length} ` +
       `dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
   );
 }

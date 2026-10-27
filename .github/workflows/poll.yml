@@ -63,6 +63,8 @@ jobs:
               # customer cards are rare and small: commit them as soon as they land
               if [ -d archive/customers ]; then git add archive/customers; fi
               if [ -f dashboard/public/customers.enc.json ]; then git add dashboard/public/customers.enc.json; fi
+              # bot reply bookkeeping (one welcome per person per hour), tiny
+              if [ -f archive/state/replies.json ]; then git add archive/state/replies.json; fi
               if [ -n "$archive_due" ]; then
                 git add archive/daily archive/unmapped.enc.json archive/state dashboard/public/reports.enc.json
               fi
