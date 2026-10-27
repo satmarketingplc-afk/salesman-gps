@@ -135,3 +135,15 @@ Dashboard payload (encrypted, last 400 points per salesman for the trail):
 - The passphrase exists only in GitHub Secrets and in your head — never in code, never committed.
 - A leaked repository tarball reveals file names and sizes, not positions or names.
 - The field app needs no password and contains no data, so it is safe to send to any phone.
+
+---
+
+## 8. Backlog (evaluated, not built yet)
+
+| Idea | Reality check | Cost |
+|---|---|---|
+| **Steps from the phone** | Telegram does not expose step data: the Bot API live-location update carries lat/lng, heading, horizontal accuracy and live period only, and Mini Apps have no health/sensor bridge. Real steps live in Google Fit / Health Connect (Android) and Apple Health (iOS) — both need a native app; iOS has no web API at all. | not possible without an app |
+| **Steps estimate from GPS** | `steps ≈ walking distance / stride` (default 0.72 m), counting only segments slower than ~2.2 m/s, labelled **est.** — honest proxy, no new data source. Cheapest useful version of the idea. | ~1 h |
+| Real pedometer | Small Android wrapper reading Health Connect + a background step sensor; breaks the "no install, Telegram only" rule. Only if the estimate proves too rough. | days |
+| Customer photos | Telegram photo → poller → downscale → archive; ~100–300 KB per card. | ½ day |
+| Stop detection | Cluster pings within 40 m over 5+ min → "visited 25 min" markers on the map. | ½ day |
