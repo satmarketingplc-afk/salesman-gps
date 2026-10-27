@@ -11,6 +11,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   poll:
@@ -58,3 +59,16 @@ jobs:
 
             sleep 15
           done
+
+      - name: Chain the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=$(curl -s -o /tmp/chain.json -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/poll.yml/dispatches" \
+            -d '{"ref":"main"}')
+          echo "chain dispatch -> HTTP $code"
+          cat /tmp/chain.json
