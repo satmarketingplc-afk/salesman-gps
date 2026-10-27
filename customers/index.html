@@ -261,6 +261,7 @@ async function load() {
     if (res.status === 404) {
       data = { generated: new Date().toISOString(), team: [], entries: [] };
       $("gate").classList.add("hidden");
+      $("generated").textContent = `${t("generated")} ${new Date(data.generated).toLocaleTimeString("en-GB", { timeZone:"Africa/Addis_Ababa" })} EAT`;
       render();
       return;
     }
