@@ -45,7 +45,14 @@ jobs:
               git add -A
               if ! git diff --cached --quiet; then
                 git commit -q -m "pings $(date -u +%FT%TZ)"
-                git push -q origin HEAD:main || (git pull -q --rebase --autostash && git push -q origin HEAD:main)
+                if ! git push -q origin HEAD:main; then
+                  # someone else pushed while we were polling: keep our files, land on top
+                  git fetch -q origin main
+                  git reset -q --soft FETCH_HEAD
+                  git add -A
+                  git commit -q -m "pings $(date -u +%FT%TZ) (merge)"
+                  git push -q origin HEAD:main || echo "push still blocked, next pass will retry"
+                fi
               fi
             fi
 
