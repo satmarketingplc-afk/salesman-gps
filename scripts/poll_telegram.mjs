@@ -105,17 +105,28 @@ async function main() {
   const stateFile = path.join(ARCHIVE, "state", "offset.json");
   const state = await readJson(stateFile, { offset: 0 });
 
-  const url = new URL(`${process.env.TELEGRAM_API_BASE || "https://api.telegram.org"}/bot${TOKEN}/getUpdates`);
-  url.searchParams.set("timeout", "0");
-  url.searchParams.set("allowed_updates", JSON.stringify(["message", "edited_message"]));
-  if (state.offset) url.searchParams.set("offset", String(state.offset));
+  // Drain up to 5 batches of 100 per pass. The offset is only committed together with the
+  // archive (once an hour), so a fresh run must be able to catch up on an hour of updates
+  // without falling behind.
+  const updates = [];
+  let cursor = state.offset;
+  for (let batch = 0; batch < 5; batch++) {
+    const url = new URL(`${process.env.TELEGRAM_API_BASE || "https://api.telegram.org"}/bot${TOKEN}/getUpdates`);
+    url.searchParams.set("timeout", "0");
+    url.searchParams.set("allowed_updates", JSON.stringify(["message", "edited_message"]));
+    if (cursor) url.searchParams.set("offset", String(cursor));
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(25000) });
-  const body = await res.json().catch(() => ({}));
-  if (!body.ok) fail(`telegram: ${body.description || res.status}`);
+    const res = await fetch(url, { signal: AbortSignal.timeout(25000) });
+    const body = await res.json().catch(() => ({}));
+    if (!body.ok) fail(`telegram: ${body.description || res.status}`);
 
-  const updates = body.result || [];
-  let nextOffset = state.offset;
+    const chunk = body.result || [];
+    updates.push(...chunk);
+    if (chunk.length) cursor = chunk[chunk.length - 1].update_id + 1;
+    if (chunk.length < 100) break;
+  }
+
+  let nextOffset = cursor;
   let stored = 0;
   let skipped = 0;
   const dirty = new Set();
@@ -185,9 +196,9 @@ async function main() {
     const pings = await loadDay(sm.code, day);
     if (!pings.length) continue;
     // whole day, so the line on the map matches the distance the card reports;
-    // decimated to ~1200 points so a phone can still draw it smoothly
+    // decimated to ~400 points: enough for the shape, small enough to commit every 2 min
     const raw = pings.slice(-TRAIL_POINTS);
-    const step = Math.ceil(raw.length / 1200);
+    const step = Math.ceil(raw.length / 400);
     const trail = step > 1 ? raw.filter((_, i) => i % step === 0 || i === raw.length - 1) : raw;
     const last = pings[pings.length - 1];
 
@@ -218,8 +229,9 @@ async function main() {
   await fs.mkdir(OUT_DIR, { recursive: true });
   await writeJson(path.join(OUT_DIR, "live.enc.json"), encryptJson({ generated: new Date().toISOString(), salesmen: live }, PASS));
 
-  // Daily activity rollup for the Reports page. Only built on the passes that commit, so
-  // the extra PBKDF2 work happens twice per run instead of every 15 seconds.
+  // Daily activity rollup for the Reports page. Only built on the passes that commit the
+  // archive (once an hour), so the extra PBKDF2 work is rare.
+  let builtReports = false;
   if (process.env.BUILD_REPORTS === "1") {
     const reports = await buildReports({
       archiveDir: ARCHIVE,
@@ -229,9 +241,14 @@ async function main() {
       now,
     });
     await writeJson(path.join(OUT_DIR, "reports.enc.json"), encryptJson(reports, PASS));
+    builtReports = true;
   }
 
-  await writeJson(stateFile, { offset: nextOffset, lastRun: new Date().toISOString() });
+  // offset only lands in git together with the archive (see the workflow): if a run dies
+  // before that, the next run re-reads those updates and the dedupe drops the repeats.
+  const nextState = { ...state, offset: nextOffset, lastRun: new Date().toISOString() };
+  if (builtReports) nextState.lastArchive = new Date().toISOString();
+  await writeJson(stateFile, nextState);
 
   console.log(
     `[poller] updates=${updates.length} stored=${stored} skipped=${skipped} ` +
