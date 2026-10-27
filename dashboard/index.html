@@ -205,11 +205,16 @@ async function decrypt(payload, passphrase) {
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
+const LOCAL = location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
+const LIVE_URL = LOCAL
+  ? "public/live.enc.json"
+  : "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/live.enc.json";
+
 async function load() {
   const pass = sessionStorage.getItem("smgps_pass");
   if (!pass) { $("gate").classList.remove("hidden"); return; }
   try {
-    const res = await fetch(`public/live.enc.json?t=${Date.now()}`, { cache: "no-store" });
+    const res = await fetch(`${LIVE_URL}?t=${Date.now()}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`http ${res.status}`);
     const box = await res.json();
     data = await decrypt(box, pass);

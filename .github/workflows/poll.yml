@@ -38,10 +38,16 @@ jobs:
           set -u
           for i in $(seq 1 18); do
             node scripts/poll_telegram.mjs || echo "poll failed, continuing"
-            git add -A
-            if ! git diff --cached --quiet; then
-              git commit -q -m "pings $(date -u +%FT%TZ)"
-              git push -q origin HEAD:main || (git pull -q --rebase --autostash && git push -q origin HEAD:main)
+
+            # commit every third pass (~45 s) + the final one: keeps the repo small
+            # and stops GitHub Pages from rebuilding on every single ping.
+            if [ $((i % 3)) -eq 0 ] || [ "$i" -eq 18 ]; then
+              git add -A
+              if ! git diff --cached --quiet; then
+                git commit -q -m "pings $(date -u +%FT%TZ)"
+                git push -q origin HEAD:main || (git pull -q --rebase --autostash && git push -q origin HEAD:main)
+              fi
             fi
+
             sleep 15
           done
