@@ -32,6 +32,16 @@ const salesmen = people.map((p, idx) => {
     trail.push([Number(lat.toFixed(6)), Number(lng.toFixed(6))]);
   }
   const stale = idx === 2;
+  // same rule as the poller: full-day distance, GPS jumps over 500 m ignored
+  let meters = 0;
+  for (let i = 1; i < trail.length; i++) {
+    const [a1, o1] = trail[i - 1], [a2, o2] = trail[i];
+    const rad = (d) => (d * Math.PI) / 180;
+    const dA = rad(a2 - a1), dO = rad(o2 - o1);
+    const h = Math.sin(dA / 2) ** 2 + Math.cos(rad(a1)) * Math.cos(rad(a2)) * Math.sin(dO / 2) ** 2;
+    const step = 2 * 6371 * Math.asin(Math.sqrt(h));
+    if (step < 0.5) meters += step;
+  }
   return {
     ...p,
     lat: trail[trail.length - 1][0],
@@ -41,6 +51,8 @@ const salesmen = people.map((p, idx) => {
     online: !stale,
     live: !stale,
     battery: 88 - idx * 17,
+    distKm: Math.round(meters * 10) / 10,
+    points: trail.length,
     trail,
   };
 });

@@ -186,6 +186,14 @@ async function main() {
     if (!pings.length) continue;
     const recent = pings.filter((p) => Date.parse(p.ts) >= now - LOOKBACK_MS).slice(-TRAIL_POINTS);
     const last = pings[pings.length - 1];
+
+    // full-day distance, ignoring GPS jumps over 500 m between two pings
+    let meters = 0;
+    for (let i = 1; i < pings.length; i++) {
+      const step = haversine([pings[i - 1].lat, pings[i - 1].lng], [pings[i].lat, pings[i].lng]);
+      if (step < 500) meters += step;
+    }
+
     live.push({
       code: sm.code,
       name: sm.name,
@@ -197,6 +205,8 @@ async function main() {
       ts: last.ts,
       online: now - Date.parse(last.ts) <= ONLINE_MS,
       live: !!last.live,
+      distKm: Math.round((meters / 1000) * 10) / 10,
+      points: pings.length,
       trail: (recent.length ? recent : pings.slice(-TRAIL_POINTS)).map((p) => [p.lat, p.lng]),
     });
   }

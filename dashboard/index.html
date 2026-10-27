@@ -52,8 +52,14 @@
   .chip.on{background:#ecfdf5; color:var(--ok)}
   .chip.stale{background:#fffbeb; color:var(--warn)}
   .chip.off{background:#f1f5f9; color:var(--off)}
-  .pmeta{display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--muted); margin-top:7px}
+  .pmeta{display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin-top:7px}
   .pmeta b{color:var(--ink); font-weight:600}
+  .dist{display:inline-flex; align-items:center; gap:5px; background:#eef2ff; color:#3730a3;
+    font-size:12px; font-weight:700; padding:3px 8px; border-radius:999px; white-space:nowrap}
+  .dist svg{width:12px; height:12px; flex:none}
+  .leaflet-tooltip.pinlabel{background:rgba(15,23,42,.88); color:#fff; border:0; border-radius:6px;
+    font-size:11px; font-weight:600; padding:3px 7px; box-shadow:0 2px 8px rgba(15,23,42,.25)}
+  .leaflet-tooltip.pinlabel::before{display:none}
   .empty{color:var(--muted); font-size:13px; line-height:1.5; padding:16px 4px}
   .gate{
     position:fixed; inset:0; background:rgba(15,23,42,.72); display:flex; align-items:center;
@@ -125,7 +131,7 @@ const I18N = {
     title:"Salesman GPS", subtitle:"Live field positions", refresh:"Refresh",
     salesmen:"Salesmen", lastSeen:"last seen", online:"live", stale:"stale", off:"offline",
     justNow:"just now", min:"min ago", hour:"h ago", accuracy:"accuracy", battery:"battery",
-    today:"today", passTitle:"Passphrase",
+    today:"today", coveredToday:"covered today", passTitle:"Passphrase",
     passHint:"The positions are encrypted. Enter the dashboard passphrase to open the map.",
     open:"Open map", wrongPass:"Wrong passphrase.", noData:"No positions yet. Send a live location to the bot.",
     footer:"Accuracy circles are real GPS error, not decoration.",
@@ -135,7 +141,7 @@ const I18N = {
     title:"የሽያጭ ሠራተኞች ካርታ", subtitle:"ቀጥታ የመስክ አቀማመጥ", refresh:"አድስ",
     salesmen:"ሽያጭ ሠራተኞች", lastSeen:"መጨረሻ የታየው", online:"ቀጥታ", stale:"ዘግይቷል", off:"ከመስመር ውጭ",
     justNow:"አሁን", min:"ደቂቃ በፊት", hour:"ሰዓት በፊት", accuracy:"ትክክለኛነት", battery:"ባትሪ",
-    today:"ዛሬ", passTitle:"የመግቢያ ቃል",
+    today:"ዛሬ", coveredToday:"ዛሬ የተጓዘው", passTitle:"የመግቢያ ቃል",
     passHint:"አካባቢዎቹ ተመስጥረዋል። ካርታውን ለመክፈት የመግቢያ ቃሉን ያስገቡ።",
     open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ስህተት ነው።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።",
     footer:"የትክክለኛነት ክበቦች እውነተኛ የጂፒኤስ ስህተት ናቸው።",
@@ -166,6 +172,7 @@ function applyLang() {
   });
   $("lang").textContent = lang === "am" ? "English" : "አማርኛ";
   localStorage.setItem("smgps_lang", lang);
+  if (data) draw(false);   // re-label pins in the new language, keep the current viewport
   render();
 }
 
@@ -187,6 +194,11 @@ function distanceKm(trail) {
     sum += 2 * R * Math.asin(Math.sqrt(h));
   }
   return sum;
+}
+
+// full-day distance from the poller; falls back to the 4 h trail for older payloads
+function coveredKm(p) {
+  return typeof p.distKm === "number" ? p.distKm : distanceKm(p.trail);
 }
 
 function b64(buf) {
@@ -238,7 +250,7 @@ async function load() {
   }
 }
 
-function draw() {
+function draw(fit = true) {
   layers.forEach((l) => map.removeLayer(l));
   layers = [];
   if (!data) return;
@@ -262,17 +274,25 @@ function draw() {
       radius: 9, color: "#fff", weight: 3, fillColor: color,
       fillOpacity: p.online ? 1 : 0.55
     }).addTo(map);
+    const name = lang === "am" ? (p.nameAm || p.name) : p.name;
+    const km = coveredKm(p).toFixed(1);
+
     dot.bindPopup(
-      `<b>${lang === "am" ? (p.nameAm || p.name) : p.name}</b><br>` +
+      `<b>${name}</b><br>` +
       `${p.code}<br>${t("lastSeen")}: ${ago(p.ts)}<br>` +
+      `${t("coveredToday")}: <b>${km} ${t("km")}</b><br>` +
       `${t("accuracy")}: ±${Math.round(p.acc || 0)} ${t("m")}` +
       (p.battery != null ? `<br>${t("battery")}: ${p.battery}%` : "")
     );
+    // the same distance, visible on the map without opening the popup
+    dot.bindTooltip(`${name} · ${km} ${t("km")}`, {
+      permanent: true, direction: "right", offset: [11, 0], className: "pinlabel"
+    });
     dot.on("click", () => setActive(p.code, false));
     layers.push(dot);
   });
 
-  if (layers.length) map.fitBounds(L.featureGroup(layers).getBounds().pad(0.25), { maxZoom: 15 });
+  if (fit && layers.length) map.fitBounds(L.featureGroup(layers).getBounds().pad(0.25), { maxZoom: 15 });
 }
 
 function setActive(code, fly = true) {
@@ -292,7 +312,7 @@ function render() {
     const recent = Date.now() - Date.parse(p.ts);
     const cls = p.live ? "on" : (recent < 15 * 60 * 1000 ? "stale" : "off");
     const label = p.live ? t("online") : (cls === "stale" ? t("stale") : t("off"));
-    const km = distanceKm(p.trail).toFixed(1);
+    const km = coveredKm(p).toFixed(1);
 
     const card = document.createElement("div");
     card.className = "person" + (p.code === activeCode ? " active" : "");
@@ -304,7 +324,11 @@ function render() {
       </div>
       <div class="pmeta">
         <span>${p.code} · ${t("lastSeen")} <b>${ago(p.ts)}</b></span>
-        <span>${t("today")} <b>${km} ${t("km")}</b></span>
+        <span class="dist" title="${t("coveredToday")}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 18h3l3-9 3 6 2-3h5"/><circle cx="4" cy="18" r="1.6"/><circle cx="20" cy="12" r="1.6"/>
+          </svg>${km} ${t("km")}</span>
       </div>`;
     card.onclick = () => setActive(p.code);
     list.appendChild(card);
