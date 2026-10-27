@@ -15,6 +15,10 @@ One repo. One bot. Two secrets. About 10 minutes — and I already did the repo 
 | Launcher | `https://satmarketingplc-afk.github.io/salesman-gps/` |
 | Manager map | `.../dashboard/` |
 | Salesman app | `.../app/` |
+| Registered | `SM-001 SAT` · tg `8973058282` · red |
+
+> The dashboard passphrase is **not** stored in this repository (it is public). It lives only in
+> GitHub Secrets and in your head.
 
 ---
 
