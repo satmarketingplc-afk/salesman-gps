@@ -137,8 +137,8 @@ rebuild is never needed for data. Deploy manually after a code change.
 
 - Salesman taps **Share live location → 8 hours** at the start of the shift (the app reminds him).
 - Manager opens the dashboard, types the passphrase once per browser session.
-- Action re-triggers itself at the end of every 4.5-minute run (GitHub cron is only a backup),
-  commits pings every ~2 minutes, and refreshes the encrypted live file.
+- Action re-triggers itself at the end of every 4.5-minute run (GitHub cron is only a backup).
+  It commits the live map every ~2 minutes and the encrypted archive once an hour.
 
 ---
 
@@ -151,16 +151,53 @@ rebuild is never needed for data. Deploy manually after a code change.
 - search by name or code, **CSV** button for Excel / Google Sheets
 - Amharic / English toggle; names switch too
 
-The poller rebuilds `dashboard/public/reports.enc.json` on every commit pass, from the same
-encrypted archive — nothing leaves the repo. To rebuild by hand (e.g. after importing old days):
+The poller rebuilds `dashboard/public/reports.enc.json` on the hourly archive pass, from the
+same encrypted archive — nothing leaves the repo. To rebuild by hand (e.g. after importing
+old days):
 
 ```powershell
 $env:DASH_PASSPHRASE="..."
 node scripts/reports_cli.mjs            # REPORT_DAYS=14 to widen the window
 ```
 
-The map now draws the **whole day's trace** (decimated to ~1200 points) and marks where the
+The map now draws the **whole day's trace** (decimated to ~400 points) and marks where the
 day started, so the line and the `km` figure describe the same walk.
+
+---
+
+## 8. Keeping it free
+
+GitHub is free for this repo **because it is public**: Actions minutes are unlimited for
+public repos and Pages costs nothing. A private repo would burn the 2,000 free minutes in
+under two days at this polling rate.
+
+Storage is the part that needs discipline. Git keeps a full copy of every version of every
+file, and an encrypted archive does not delta-compress. So:
+
+- the **live payload** (`dashboard/public/live.enc.json`, a few KB) is committed every ~2 min;
+- the **archive** (the day file that keeps growing) is committed **at most once an hour**,
+  together with the Telegram offset and the report.
+
+The offset rides with the archive on purpose: if a run dies before the hourly commit, the
+next run re-reads those updates and the dedupe drops the repeats. A catch-up loop drains up
+to 500 updates per pass, so an hour of backlog clears without falling behind.
+
+One salesman's full day is about 300 KB, so the hourly pattern adds roughly 2 MB/day
+instead of ~1 GB/day. Three or four active salesmen ≈ 200 MB/month.
+
+If the repo passes ~800 MB (check the repo page), squash the history. This rewrites history,
+so anyone with a clone must re-clone:
+
+```powershell
+git checkout --orphan clean
+git add -A
+git commit -m "snapshot"
+git branch -M clean main
+git push -f origin main
+```
+
+Beyond ~5 active salesmen, move the archive out of git history (hourly chunk files or GitHub
+Releases). The free plan is not the limit — the whole-file rewrite pattern is.
 
 ---
 

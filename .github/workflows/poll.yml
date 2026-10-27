@@ -38,16 +38,31 @@ jobs:
         run: |
           set -u
           for i in $(seq 1 18); do
-            # rebuild the daily activity report on the passes that commit (not every 15 s:
-            # each archive file needs its own PBKDF2 key)
-            build_reports=""
-            if [ $((i % 8)) -eq 0 ] || [ "$i" -eq 18 ]; then build_reports=1; fi
-            BUILD_REPORTS="$build_reports" node scripts/poll_telegram.mjs || echo "poll failed, continuing"
+            commit_pass=""
+            if [ $((i % 8)) -eq 0 ] || [ "$i" -eq 18 ]; then commit_pass=1; fi
 
-            # commit every 8th pass (~2 min) + the last one: the dashboard reads through a
-            # CDN anyway, and every commit triggers a Pages/Render rebuild we don't need.
-            if [ $((i % 8)) -eq 0 ] || [ "$i" -eq 18 ]; then
-              git add -A
+            # Free-tier economy: the live payload (small) commits every pass, while the
+            # archive + offset + report land at most once an hour. Git stores a full copy of
+            # a rewritten file, so committing the growing day file every 2 minutes would add
+            # ~1 GB a month per active salesman.
+            archive_due=""
+            if [ -n "$commit_pass" ]; then
+              last=""
+              if [ -f archive/state/offset.json ]; then
+                last=$(jq -r '.lastArchive // empty' archive/state/offset.json 2>/dev/null || true)
+              fi
+              last_s=0
+              if [ -n "$last" ]; then last_s=$(date -d "$last" +%s 2>/dev/null || echo 0); fi
+              if [ $(( $(date +%s) - last_s )) -ge 3300 ]; then archive_due=1; fi
+            fi
+
+            BUILD_REPORTS="$archive_due" node scripts/poll_telegram.mjs || echo "poll failed, continuing"
+
+            if [ -n "$commit_pass" ]; then
+              git add dashboard/public/live.enc.json
+              if [ -n "$archive_due" ]; then
+                git add archive/daily archive/unmapped.enc.json archive/state dashboard/public/reports.enc.json
+              fi
               if ! git diff --cached --quiet; then
                 git commit -q -m "pings $(date -u +%FT%TZ)"
                 if ! git push -q origin HEAD:main; then
