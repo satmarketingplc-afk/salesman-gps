@@ -7,7 +7,7 @@ off for up to 8 hours.
 - **Capture:** Telegram live location (15 s updates)
 - **Store:** a GitHub repo, encrypted, one file per salesman per day
 - **Live view:** encrypted file in the repo, decrypted in the browser
-- **Hosting:** GitHub Pages or Render (static, `render.yaml` included)
+- **Hosting:** Render web service (one small Node process; GitHub Pages works as a read-only mirror)
 - **Server:** none. One GitHub Action that re-triggers itself.
 
 ## Quick start

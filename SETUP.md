@@ -71,26 +71,53 @@ The mock only writes `dashboard/public/live.enc.json`; do not commit it over the
 
 ---
 
-## 5. Hosting on Render (alongside Pages)
+## 5. Hosting on Render (web service)
 
-The page is pure static files, and it reads positions from `raw.githubusercontent.com`, so
-GitHub Pages and Render can both serve it — neither one holds the data.
+The page itself is static, but the **Refresh** button needs a place to keep the bot token,
+so Render runs one small Node process (`server/index.mjs`, no dependencies):
 
-1. Render → **New → Blueprint** → pick `satmarketingplc-afk/salesman-gps`. `render.yaml`
-   already defines the build (`_site` with `index.html`, `app/`, `dashboard/`).
-2. Or **New → Static Site** manually:
-   - Build command: `rm -rf _site && mkdir -p _site && cp index.html _site/ && cp -r app dashboard _site/`
-   - Publish directory: `_site`
-3. Open `https://<your-service>.onrender.com/` — same three doors:
-   - `/` launcher · `/dashboard/` manager map · `/app/` salesman app
+- serves the launcher, the dashboard and the salesman app,
+- answers `POST /api/nudge` by asking the team on Telegram for a fresh point,
+- answers `/healthz` for the keep-alive pings.
 
-Optional: keep only Render and turn Pages off (Repo → Settings → Pages → Source: None).
-The Action keeps writing to GitHub either way.
+Data still lives in GitHub: the page reads positions from `raw.githubusercontent.com`, and
+the Action keeps writing there. GitHub Pages can stay as a read-only mirror — on Pages the
+Refresh button simply reloads (no `/api`), everything else is identical.
 
-**Turn Render's Auto-Deploy OFF** (Settings → Build & Deploy → Auto-Deploy: No). Every poll
-commits to the repo; with auto-deploy on, Render would rebuild the static site hundreds of
-times a day and burn the free build minutes. The site does not need rebuilding for data —
-it fetches the encrypted payload from GitHub on every page load.
+**Deploy:** Render → **New → Blueprint** → pick `satmarketingplc-afk/salesman-gps`.
+`render.yaml` sets the build (copies `index.html`, `app/`, `dashboard/` into `dist/`), the
+start command and the health check.
+
+**Environment variables** (Render → Environment):
+
+| Key | Value | Needed |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | bot token from BotFather | yes |
+| `DASH_PASSPHRASE` | `SalesMap-2026-Addis` (same as GitHub secret) | yes |
+| `GH_DISPATCH_TOKEN` | fine-grained PAT, **Actions: write**, this repo | optional |
+
+With `GH_DISPATCH_TOKEN` set, Refresh also starts a poll run immediately, so a new point
+appears in ~20 seconds instead of waiting for the next run (≤ 5 min).
+
+### What Refresh does
+
+1. Sends every active salesman a Telegram message with a one-tap **📍 Send location** button.
+2. Telegram returns one fresh point when he taps it.
+3. The poller stores it, the dashboard reloads itself for the next 5 minutes.
+
+Telegram limit worth knowing: a bot cannot force a **live** location. The button gives one
+point; continuous tracking still starts with Telegram → Attach → Location → Share live
+location → 8 hours. Cooldowns: 20 s globally, 90 s per salesman.
+
+### Keep it awake
+
+Render's free web service sleeps after ~15 minutes without traffic, and a sleeping service
+cannot wake itself. `.github/workflows/keepalive.yml` pings `/healthz` every 10 minutes, but
+GitHub's scheduler is best-effort — also add a free monitor (cron-job.org or UptimeRobot),
+URL `https://<service>.onrender.com/healthz`, every 5 minutes.
+
+**Auto-Deploy stays OFF** (`render.yaml` sets it): the poller commits every ~2 minutes and a
+rebuild is never needed for data. Deploy manually after a code change.
 
 ---
 
@@ -111,5 +138,8 @@ it fetches the encrypted payload from GitHub on every page load.
 | Nobody appears | telegram id not in roster | `node scripts/roster.mjs unmapped` then `add` |
 | "Wrong passphrase" | typo, or secret changed | re-enter; if secret changed, wait for next run |
 | Pin frozen for hours | GitHub disabled the schedule after 60 days idle | any push re-enables it; bot commits normally keep it alive |
+| Refresh says "Could not reach the server" | opened the GitHub Pages copy (no `/api`), or the Render service is asleep | use the Render URL; the keep-alive ping should keep it awake |
+| Refresh says "Please wait 20s" | someone just pressed it | wait for the countdown; 90 s per salesman |
+| Render answers 502 after a quiet night | free service was asleep | first request wakes it (~50 s); check the keep-alive monitor |
 | Action fails `Bad credentials` | bot token revoked | BotFather → `/token`, update secret |
 | Telegram stops after 8 h | live-location limit | share again; the app shows a renew warning at 7h48m |

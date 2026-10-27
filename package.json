@@ -1,0 +1,14 @@
+{
+  "name": "salesman-gps",
+  "private": true,
+  "type": "module",
+  "description": "Telegram live location -> encrypted GitHub archive -> manager map",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "poll": "node scripts/poll_telegram.mjs",
+    "mock": "node scripts/mock_live.mjs"
+  }
+}
