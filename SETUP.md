@@ -55,6 +55,25 @@ gh secret set DASH_PASSPHRASE    --repo satmarketingplc-afk/salesman-gps
 **Changing the passphrase later** re-encrypts nothing by itself — the old archive files stay
 readable only with the old phrase. Do it at the start of a month, or ask for the re-encrypt script.
 
+**"Wrong passphrase" on the dashboard? Check secret drift first.** The poller (GitHub Actions)
+*encrypts* with `secrets.DASH_PASSPHRASE`; you *decrypt* with whatever you type. If either the
+Actions secret or the Render env var was changed, rotated, or contains trailing whitespace/newline
+that differs from what people type, every correct-looking passphrase fails. Verify:
+
+```powershell
+# 1. Does the GitHub Actions secret decrypt the live repo files?
+$env:DASH_PASSPHRASE="<what you type into the dashboard>"
+node scripts/diagnose.mjs        # "Cannot decrypt the roster" => secret mismatch
+
+# 2. Compare the stored secret byte-for-byte (trailing spaces are invisible!)
+gh secret view DASH_PASSPHRASE --repo satmarketingplc-afk/salesman-gps | cat -A
+```
+
+Fix by setting the exact same value in BOTH places (`gh secret set` + Render → Environment
+Variables), entered without copy-paste whitespace. The dashboard now shows a distinct
+"live file is stale / re-encrypted" message when the poller stopped or drifted, instead of
+falsely blaming your typing.
+
 ---
 
 ## 4. Online only — no local preview

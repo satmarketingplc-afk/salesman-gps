@@ -149,7 +149,7 @@ const I18N = {
     nudgeBusy:"Please wait {n}s before asking again.",
     nudgeFail:"Could not reach the server — showing the latest saved position.",
     passHint:"The positions are encrypted. Enter the dashboard passphrase to open the map.",
-    open:"Open map", wrongPass:"Wrong passphrase — trim extra spaces and capital letters, then try again. If it still fails, the team changed the passphrase or re-encrypted the data with a new one; ask for the current value.", noData:"No positions yet. Send a live location to the bot.", loadFail:"Could not reach GitHub — check your connection. The map will retry automatically; your passphrase was kept.",
+    open:"Open map", wrongPass:"Wrong passphrase — trim extra spaces and capital letters, then try again. If it still fails, the team changed the passphrase or re-encrypted the data with a new one; ask for the current value.", staleFile:"The live file on GitHub looks older than 2 hours — the poller may have stopped or been re-encrypted with a different secret. Check the Actions tab for 'poll-telegram'.", noData:"No positions yet. Send a live location to the bot.", loadFail:"Could not reach GitHub — check your connection. The map will retry automatically; your passphrase was kept.",
     footer:"Accuracy circles are real GPS error, not decoration.",
     generated:"updated", people:"people", m:"m", km:"km"
   },
@@ -340,7 +340,19 @@ async function load() {
       return;
     }
     sessionStorage.removeItem("smgps_pass");
-    $("gateErr").textContent = t("wrongPass");
+    // If the encrypted file itself is stale (poller stopped, or it was re-encrypted
+    // with a DIFFERENT DASH_PASSPHRASE secret on the server), saying "Wrong
+    // passphrase" is misleading — the user's passphrase may be perfectly correct.
+    let stale = false;
+    try {
+      const res2 = await fetch(`${LIVE_URL}?t=${Date.now()}`, { cache: "no-store" });
+      if (res2.ok) {
+        const box2 = await res2.json();
+        const gen = Date.parse(box2 && box2.generated || "");
+        if (!Number.isNaN(gen) && Date.now() - gen > 2 * 3600 * 1000) stale = true;
+      }
+    } catch { /* keep wrongPass message */ }
+    $("gateErr").textContent = stale ? t("staleFile") : t("wrongPass");
     $("gateErr").style.display = "block";
     $("gate").classList.remove("hidden");
   }
