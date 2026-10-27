@@ -362,9 +362,12 @@ $("q").oninput = (e) => { query = e.target.value; render(); };
 
 $("gateForm").onsubmit = async (e) => {
   e.preventDefault();
-  const pass = $("pass").value;
+  // Trim surrounding whitespace — copy/paste often carries a stray space or newline,
+  // which AES-GCM then rejects as "Wrong passphrase".
+  const pass = $("pass").value.trim();
   if (!pass) return;
   sessionStorage.setItem("smgps_pass", pass);
+  $("pass").value = "";
   $("gateErr").style.display = "none";
   await load();
 };
