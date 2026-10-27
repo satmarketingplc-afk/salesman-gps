@@ -57,20 +57,21 @@ readable only with the old phrase. Do it at the start of a month, or ask for the
 
 ---
 
-## 4. Local preview
+## 4. Online only — no local preview
 
-```powershell
-cd C:\Users\Ad\.cache\salesman-gps
-node scripts/mock_live.mjs            # passphrase demo1234
-python -m http.server 8080
-```
+This system is designed to run **only online**: Telegram → GitHub Actions → encrypted repo →
+hosted pages. Never run it on a laptop as your day-to-day system — nothing you do locally
+affects production, and the pages deliberately fetch real data from the hosted repo so a
+half-set-up local copy can never show stale or fake points.
 
-- Launcher <http://localhost:8080/>
-- Manager map <http://localhost:8080/dashboard/> · `demo1234`
-- Salesman app <http://localhost:8080/app/>
+Open the live URLs instead:
 
-The mock only writes `dashboard/public/live.enc.json`; do not commit it over the real one
-(the next poll replaces it anyway).
+- Launcher <https://satmarketingplc-afk.github.io/salesman-gps/>
+- Manager map <https://satmarketingplc-afk.github.io/salesman-gps/dashboard/> (your passphrase)
+- Salesman app <https://satmarketingplc-afk.github.io/salesman-gps/app/>
+
+If the map shows "waiting for data", that means the pipeline (not your machine) needs a fix:
+check the Actions run log and `roster.mjs unmapped`.
 
 ---
 

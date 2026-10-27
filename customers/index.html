@@ -231,10 +231,8 @@ async function decrypt(payload, passphrase) {
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
-const LOCAL = location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
-const DATA_URL = LOCAL
-  ? "../dashboard/public/customers.enc.json"
-  : "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/customers.enc.json";
+// Online-only: always read from the hosted repo (GitHub raw). No local/file fallbacks.
+const DATA_URL = "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/customers.enc.json";
 
 const escapeHtml = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));

@@ -240,10 +240,11 @@ async function decrypt(payload, passphrase) {
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
-const LOCAL = location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
-const LIVE_URL = LOCAL
-  ? "public/live.enc.json"
-  : "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/live.enc.json";
+// Online-only: always read the live payload from the hosted repo (GitHub raw).
+// Works identically on GitHub Pages and Render — no local/file fallbacks.
+const GH_OWNER = "satmarketingplc-afk";
+const GH_REPO_NAME = "salesman-gps";
+const LIVE_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO_NAME}/main/dashboard/public/live.enc.json`;
 
 // The hosting server (Render) answers /healthz and can ask the team for a fresh point.
 // On GitHub Pages these paths 404, so the button silently falls back to a plain reload.

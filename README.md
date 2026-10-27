@@ -17,15 +17,15 @@ off for up to 8 hours.
 Read `SETUP.md` (20 min, one bot + two repos + three secrets), then open the Pages URL and
 type your passphrase.
 
-## Local preview
+## Online only
 
-```powershell
-node scripts/mock_live.mjs
-cd dashboard
-python -m http.server 8080
-```
+This system runs entirely online — Telegram → GitHub Actions → encrypted repo → hosted pages.
+There is no local/dev server in normal operation; do not run it locally. The dashboard,
+reports, and customer board always fetch their data from the hosted repo, so they show real
+data only when opened at the live URLs:
 
-<http://localhost:8080> · passphrase `demo1234`
+- Launcher / map: `https://satmarketingplc-afk.github.io/salesman-gps/`
+- Optional service (Refresh button): `https://salesman-gps.onrender.com`
 
 ## Files
 
