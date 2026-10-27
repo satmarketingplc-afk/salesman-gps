@@ -110,6 +110,7 @@
   </div>
   <div class="status" id="status">—</div>
   <button class="hbtn" id="lang">አማርኛ</button>
+  <a class="hbtn" id="reportsBtn" href="../reports/" data-i18n="reportsBtn">Reports</a>
   <button class="hbtn" id="refresh" data-i18n="refresh">Refresh</button>
   <button class="hbtn" id="lock">🔒</button>
 </header>
@@ -141,7 +142,8 @@ const I18N = {
   en: {
     title:"Salesman GPS", subtitle:"Live field positions", refresh:"Refresh",
     salesmen:"Salesmen", lastSeen:"last seen", online:"live", stale:"stale", off:"offline", recent:"recent",
-    justNow:"just now", min:"min ago", hour:"h ago", accuracy:"accuracy", battery:"battery",
+    reportsBtn:"Reports",
+    justNow:"just now", min:"min ago", hour:"h ago", accuracy:"accuracy", battery:"battery", start:"start",
     today:"today", coveredToday:"covered today", passTitle:"Passphrase",
     nudgeSent:"Location request sent to {n}. New point appears in a few minutes.",
     nudgeBusy:"Please wait {n}s before asking again.",
@@ -154,7 +156,8 @@ const I18N = {
   am: {
     title:"የሽያጭ ሠራተኞች ካርታ", subtitle:"ቀጥታ የመስክ አቀማመጥ", refresh:"አድስ",
     salesmen:"ሽያጭ ሠራተኞች", lastSeen:"መጨረሻ የታየው", online:"ቀጥታ", stale:"ዘግይቷል", off:"ከመስመር ውጭ", recent:"አዲስ",
-    justNow:"አሁን", min:"ደቂቃ በፊት", hour:"ሰዓት በፊት", accuracy:"ትክክለኛነት", battery:"ባትሪ",
+    reportsBtn:"ሪፖርት",
+    justNow:"አሁን", min:"ደቂቃ በፊት", hour:"ሰዓት በፊት", accuracy:"ትክክለኛነት", battery:"ባትሪ", start:"መነሻ",
     today:"ዛሬ", coveredToday:"ዛሬ የተጓዘው", passTitle:"የመግቢያ ቃል",
     nudgeSent:"የአካባቢ ጥያቄ ወደ {n} ተልኳል። አዲሱ ነጥብ በጥቂት ደቂቃዎች ይታያል።",
     nudgeBusy:"እባክዎ {n} ሰከንድ ይጠብቁ።",
@@ -295,9 +298,15 @@ function draw(fit = true) {
       layers.push(
         L.polyline(p.trail, {
           color, weight: p.online ? 4 : 3, opacity: p.online ? 0.7 : 0.35,
-          dashArray: p.online ? null : "6 8"
+          dashArray: p.online ? null : "6 8", smoothFactor: 2
         }).addTo(map)
       );
+      // where the day started, so the trace reads as a route, not a scribble
+      const start = L.circleMarker(p.trail[0], {
+        radius: 4, color: "#fff", weight: 2, fillColor: color, fillOpacity: 0.9
+      }).addTo(map);
+      start.bindTooltip(t("start"), { direction: "top", offset: [0, -7], className: "pinlabel" });
+      layers.push(start);
     }
     if (p.acc) {
       layers.push(L.circle([p.lat, p.lng], {

@@ -9,12 +9,13 @@
  *   ARCHIVE_DIR          encrypted archive dir    (default ./archive)
  *   ROSTER_FILE          encrypted roster         (default ./private/roster.enc.json)
  *   OUT_DIR              dashboard payload dir    (default ./dashboard/public)
- *   LOOKBACK_MS          trail window for the map (default 4h)
+ *   BUILD_REPORTS        set to 1 to rebuild the daily activity report on that pass
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import { encryptJson, decryptJson } from "./crypto.mjs";
+import { buildReports } from "./report.mjs";
 
 const ROOT = process.cwd();
 const ARCHIVE = path.resolve(ROOT, process.env.ARCHIVE_DIR || "archive");
@@ -22,11 +23,10 @@ const ROSTER_FILE = path.resolve(ROOT, process.env.ROSTER_FILE || "private/roste
 const OUT_DIR = path.resolve(ROOT, process.env.OUT_DIR || "dashboard/public");
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PASS = process.env.DASH_PASSPHRASE || "";
-const LOOKBACK_MS = Number(process.env.LOOKBACK_MS || 4 * 3600 * 1000);
 
 const EAT_MS = 3 * 3600 * 1000;
 const ONLINE_MS = Number(process.env.ONLINE_MS || 10 * 60 * 1000);
-const TRAIL_POINTS = 400;
+const TRAIL_POINTS = 3000;
 const MIN_MOVE_M = 8;
 
 if (!TOKEN) fail("TELEGRAM_BOT_TOKEN is not set");
@@ -184,7 +184,11 @@ async function main() {
     const day = dayKey(new Date(now).toISOString());
     const pings = await loadDay(sm.code, day);
     if (!pings.length) continue;
-    const recent = pings.filter((p) => Date.parse(p.ts) >= now - LOOKBACK_MS).slice(-TRAIL_POINTS);
+    // whole day, so the line on the map matches the distance the card reports;
+    // decimated to ~1200 points so a phone can still draw it smoothly
+    const raw = pings.slice(-TRAIL_POINTS);
+    const step = Math.ceil(raw.length / 1200);
+    const trail = step > 1 ? raw.filter((_, i) => i % step === 0 || i === raw.length - 1) : raw;
     const last = pings[pings.length - 1];
 
     // full-day distance, ignoring GPS jumps over 500 m between two pings
@@ -207,12 +211,26 @@ async function main() {
       live: !!last.live,
       distKm: Math.round((meters / 1000) * 10) / 10,
       points: pings.length,
-      trail: (recent.length ? recent : pings.slice(-TRAIL_POINTS)).map((p) => [p.lat, p.lng]),
+      trail: trail.map((p) => [p.lat, p.lng]),
     });
   }
 
   await fs.mkdir(OUT_DIR, { recursive: true });
   await writeJson(path.join(OUT_DIR, "live.enc.json"), encryptJson({ generated: new Date().toISOString(), salesmen: live }, PASS));
+
+  // Daily activity rollup for the Reports page. Only built on the passes that commit, so
+  // the extra PBKDF2 work happens twice per run instead of every 15 seconds.
+  if (process.env.BUILD_REPORTS === "1") {
+    const reports = await buildReports({
+      archiveDir: ARCHIVE,
+      roster,
+      passphrase: PASS,
+      days: Number(process.env.REPORT_DAYS || 7),
+      now,
+    });
+    await writeJson(path.join(OUT_DIR, "reports.enc.json"), encryptJson(reports, PASS));
+  }
+
   await writeJson(stateFile, { offset: nextOffset, lastRun: new Date().toISOString() });
 
   console.log(
