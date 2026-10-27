@@ -31,12 +31,10 @@ const PASS = () => process.env.DASH_PASSPHRASE || "";
 const EAT_MS = 3 * 3600 * 1000;
 const ONLINE_MS = Number(process.env.ONLINE_MS || 10 * 60 * 1000);
 const TRAIL_POINTS = 3000;
-// Time-based dedupe (was distance-based): while a person stands still Telegram keeps
-// re-sending the same coordinates every 15 s. Dropping points closer than 8 m froze the
-// trail and let the pin fall "offline" even though the salesman was sharing. Now we keep
-// one point per MIN_INTERVAL_S per live session, so a stationary person still produces a
-// point every minute and stays online.
-const MIN_INTERVAL_S = Number(process.env.MIN_INTERVAL_S || 60);
+// Dedupe is by EXACT timestamp (see the day-file write below): replayed updates carry the
+// same ts and are dropped, while every distinct point — including out-of-order replays of
+// older pings — lands in the archive. The old distance-based rule froze stationary trails;
+// the intermediate time-window rule then silently dropped legitimate out-of-order points.
 const API = process.env.TELEGRAM_API_BASE || "https://api.telegram.org";
 const AUTO_ASSIGN = process.env.AUTO_ASSIGN !== "0";
 const JOIN_SECRET = (process.env.JOIN_SECRET || "").trim();
@@ -540,18 +538,22 @@ async function main() {
 
     const day = dayKey(ts);
     const pings = await loadDay(sm.code, day);
-    const last = pings[pings.length - 1];
-    // Time-based dedupe: keep a point when it is at least MIN_INTERVAL_S newer than the
-    // last one. Exact re-sends (same coords AND same timestamp, replayed updates) are
-    // always dropped; stationary people still get a heartbeat point every minute.
-    const duplicate =
-      last && Date.parse(ping.ts) - Date.parse(last.ts) < MIN_INTERVAL_S * 1000;
-    if (duplicate) {
+    // Exact-timestamp dedupe: Telegram re-sends the same live-session update until the
+    // offset advances (the offset only lands in git hourly), and every replay carries the
+    // SAME ts. Anything whose exact ts is already archived is a duplicate — drop it.
+    // The old "newer than the LAST point by MIN_INTERVAL_S" rule silently discarded
+    // legitimate out-of-order replays older than the newest point (e.g. a burst of missed
+    // updates arriving after a connectivity gap), permanently losing archive data.
+    if (pings.some((x) => x.ts === ping.ts)) {
       skipped++;
       continue;
     }
 
-    pings.push(ping);
+    // keep the day file sorted by ts: out-of-order arrivals are inserted in place, so
+    // `last` (the newest point) and the trail/distance walks below stay correct
+    let at = pings.length;
+    while (at > 0 && Date.parse(pings[at - 1].ts) > Date.parse(ping.ts)) at--;
+    pings.splice(at, 0, ping);
     await saveDay(sm.code, day, pings);
     dirty.add(sm.code);
     stored++;

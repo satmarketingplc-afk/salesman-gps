@@ -41,13 +41,15 @@ private/roster.enc.json                    code → name, colour, telegram id (e
 The telegram id is not stored in the archive — it only lives in the encrypted roster, so a
 leaked day file cannot be tied to a phone number.
 
-**Dedupe (time-based):** a ping is kept when its timestamp is at least `MIN_INTERVAL_S`
-(default 60 s) newer than the last stored point; anything closer is dropped as a duplicate.
-Distance-based dropping was removed: Telegram re-sends identical coordinates while a person
-stands still, so an 8 m rule froze trails and made stationary salesmen look offline. With the
-60 s heartbeat a standing person still produces a point every minute and stays `online`.
-Exact replays (same update_id range re-read after a crash) are always dropped because their
-timestamp does not advance.
+**Dedupe (exact timestamp):** a ping is dropped only when its exact `ts` is already stored
+in that day's file — replayed Telegram updates (the offset lands in git hourly, so runs
+re-read the same updates) always carry the same timestamp. Every distinct point is kept and
+inserted into the day file in timestamp order, so out-of-order replays of older pings are
+never lost. Distance-based dropping was removed: Telegram re-sends identical coordinates
+while a person stands still, so an 8 m rule froze trails and made stationary salesmen look
+offline. A time-window rule (`MIN_INTERVAL_S`) briefly replaced it but silently discarded
+legitimate out-of-order points; exact-timestamp dedupe keeps the heartbeat points Telegram
+emits per live session while staying lossless.
 
 ## Live payload
 

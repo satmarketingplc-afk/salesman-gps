@@ -153,6 +153,14 @@ const I18N = {
 };
 let lang = localStorage.getItem("smgps_lang") || "en";
 const t = (k) => (I18N[lang][k] ?? I18N.en[k] ?? k);
+
+// Roster names/codes/colours are human-editable data rendered into innerHTML —
+// escape text and validate colours before they reach the DOM.
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (m) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+const safeColor = (c, fallback = "#2563eb") =>
+  /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(c || "")) ? c : fallback;
 const $ = (id) => document.getElementById(id);
 
 let data = null;
@@ -162,13 +170,37 @@ function b64(buf) {
   return Uint8Array.from(atob(buf), (c) => c.charCodeAt(0));
 }
 
-async function decrypt(payload, passphrase) {
+async function deriveDecryptKey(passphrase, saltB64, iter) {
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
-  const key = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: b64(payload.salt), iterations: payload.iter, hash: "SHA-256" },
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64(saltB64), iterations: iter, hash: "SHA-256" },
     base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
   );
+}
+
+// The poller re-encrypts the report with a fresh random salt on every hourly build, so cache
+// by (passphrase, salt, iter): repeated decryptions of the same payload skip the 210k-iteration
+// PBKDF2 derivation (~0.1–1 s of blocked main thread on low-end devices). An extractable key is
+// exported once and re-imported as a normal AES-GCM key — the raw bytes never touch storage and
+// the cache lives only in this tab's memory.
+const KEY_CACHE_MAX = 8;
+const webKeyCache = new Map(); // "pass|salt|iter" -> Promise<CryptoKey>
+
+async function decrypt(payload, passphrase) {
+  const ck = `${passphrase}|${payload.salt}|${payload.iter}`;
+  let pending = webKeyCache.get(ck);
+  if (!pending) {
+    pending = (async () => {
+      const key = await deriveDecryptKey(passphrase, payload.salt, payload.iter);
+      const raw = await crypto.subtle.exportKey("raw", key); // make it re-importable & cheap
+      return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+    })();
+    if (webKeyCache.size >= KEY_CACHE_MAX) webKeyCache.delete(webKeyCache.keys().next().value);
+    webKeyCache.set(ck, pending);
+    pending.catch(() => webKeyCache.delete(ck)); // never cache a failed derivation
+  }
+  const key = await pending;
   const ct = b64(payload.ct);
   const tag = b64(payload.tag);
   const both = new Uint8Array(ct.length + tag.length);
@@ -269,9 +301,9 @@ function render() {
             ${d.rows
               .map(
                 (r) => `<tr>
-                  <td><span class="pname"><span class="dot" style="background:${r.color}"></span>${
-                    lang === "am" ? r.nameAm : r.name
-                  } <span style="color:#94a3b8;font-weight:400">${r.code}</span></span></td>
+                  <td><span class="pname"><span class="dot" style="background:${safeColor(r.color)}"></span>${
+                    esc(lang === "am" ? r.nameAm : r.name)
+                  } <span style="color:#94a3b8;font-weight:400">${esc(r.code)}</span></span></td>
                   <td>${hhmm(r.first)}</td>
                   <td>${hhmm(r.last)}</td>
                   <td class="num">${r.pings}</td>

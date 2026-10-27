@@ -216,13 +216,37 @@ function b64(buf) {
   return Uint8Array.from(atob(buf), (c) => c.charCodeAt(0));
 }
 
-async function decrypt(payload, passphrase) {
+async function deriveDecryptKey(passphrase, saltB64, iter) {
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
-  const key = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: b64(payload.salt), iterations: payload.iter, hash: "SHA-256" },
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64(saltB64), iterations: iter, hash: "SHA-256" },
     base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
   );
+}
+
+// Cache derived keys by (passphrase, salt, iter): the board auto-refreshes and repeated
+// decryptions of the same payload then skip the 210k-iteration PBKDF2 derivation (~0.1–1 s
+// of blocked main thread on low-end devices). The key is exported once to raw bytes and
+// re-imported as a normal AES-GCM key; raw bytes never touch storage and the cache lives
+// only in this tab's memory.
+const KEY_CACHE_MAX = 8;
+const webKeyCache = new Map(); // "pass|salt|iter" -> Promise<CryptoKey>
+
+async function decrypt(payload, passphrase) {
+  const ck = `${passphrase}|${payload.salt}|${payload.iter}`;
+  let pending = webKeyCache.get(ck);
+  if (!pending) {
+    pending = (async () => {
+      const key = await deriveDecryptKey(passphrase, payload.salt, payload.iter);
+      const raw = await crypto.subtle.exportKey("raw", key); // make it re-importable & cheap
+      return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+    })();
+    if (webKeyCache.size >= KEY_CACHE_MAX) webKeyCache.delete(webKeyCache.keys().next().value);
+    webKeyCache.set(ck, pending);
+    pending.catch(() => webKeyCache.delete(ck)); // never cache a failed derivation
+  }
+  const key = await pending;
   const ct = b64(payload.ct);
   const tag = b64(payload.tag);
   const both = new Uint8Array(ct.length + tag.length);

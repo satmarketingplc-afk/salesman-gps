@@ -171,6 +171,15 @@ const I18N = {
 let lang = localStorage.getItem("smgps_lang") || "en";
 const t = (k) => (I18N[lang][k] ?? I18N.en[k] ?? k);
 
+// Names and colour codes come from the roster, which humans edit; never inject them
+// into HTML unescaped. esc() covers text nodes, safeColor() rejects anything that is
+// not a plain hex colour before it reaches a style attribute.
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (m) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+const safeColor = (c, fallback = "#2563eb") =>
+  /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(c || "")) ? c : fallback;
+
 const map = L.map("map", { zoomControl: true, attributionControl: true }).setView([9.0108, 38.7613], 13);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
@@ -225,13 +234,38 @@ function b64(buf) {
   return Uint8Array.from(atob(buf), (c) => c.charCodeAt(0));
 }
 
-async function decrypt(payload, passphrase) {
+async function deriveDecryptKey(passphrase, saltB64, iter) {
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
-  const key = await crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt: b64(payload.salt), iterations: payload.iter, hash: "SHA-256" },
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64(saltB64), iterations: iter, hash: "SHA-256" },
     base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]
   );
+}
+
+// The dashboard auto-refreshes every minute and each poll re-encrypts the payload with a
+// fresh random salt, so cache by (passphrase, salt, iter). An extractable key lets WebCrypto
+// export it once and reuse the raw bytes across refreshes — this skips the 210k-iteration
+// PBKDF2 derivation (~0.1–1 s of blocked main thread on low-end devices) for every repeat
+// salt. The cache is per-tab in-memory only; salts are 16 random bytes, so hits can only be
+// boxes this tab has already seen.
+const KEY_CACHE_MAX = 16;
+const webKeyCache = new Map(); // "pass|salt|iter" -> Promise<CryptoKey>
+
+async function decrypt(payload, passphrase) {
+  const ck = `${passphrase}|${payload.salt}|${payload.iter}`;
+  let pending = webKeyCache.get(ck);
+  if (!pending) {
+    pending = (async () => {
+      const key = await deriveDecryptKey(passphrase, payload.salt, payload.iter);
+      const raw = await crypto.subtle.exportKey("raw", key); // make it re-importable & cheap
+      return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+    })();
+    if (webKeyCache.size >= KEY_CACHE_MAX) webKeyCache.delete(webKeyCache.keys().next().value);
+    webKeyCache.set(ck, pending);
+    pending.catch(() => webKeyCache.delete(ck)); // never cache a failed derivation
+  }
+  const key = await pending;
   const ct = b64(payload.ct);
   const tag = b64(payload.tag);
   const both = new Uint8Array(ct.length + tag.length);
@@ -308,7 +342,7 @@ function draw(fit = true) {
   if (!data) return;
 
   data.salesmen.forEach((p) => {
-    const color = p.color || "#2563eb";
+    const color = safeColor(p.color);
     if (p.trail && p.trail.length > 1) {
       layers.push(
         L.polyline(p.trail, {
@@ -332,12 +366,12 @@ function draw(fit = true) {
       radius: 9, color: "#fff", weight: 3, fillColor: color,
       fillOpacity: p.online ? 1 : 0.55
     }).addTo(map);
-    const name = lang === "am" ? (p.nameAm || p.name) : p.name;
+    const name = esc(lang === "am" ? (p.nameAm || p.name) : p.name);
     const km = coveredKm(p).toFixed(1);
 
     dot.bindPopup(
       `<b>${name}</b><br>` +
-      `${p.code}<br>${t("lastSeen")}: ${ago(p.ts)}<br>` +
+      `${esc(p.code)}<br>${t("lastSeen")}: ${ago(p.ts)}<br>` +
       `${t("coveredToday")}: <b>${km} ${t("km")}</b><br>` +
       `${t("accuracy")}: ±${Math.round(p.acc || 0)} ${t("m")}` +
       (p.battery != null ? `<br>${t("battery")}: ${p.battery}%` : "")
@@ -378,12 +412,12 @@ function render() {
     card.className = "person" + (p.code === activeCode ? " active" : "");
     card.innerHTML = `
       <div class="prow">
-        <span class="dot" style="background:${p.color}"></span>
-        <span class="pname">${lang === "am" ? (p.nameAm || p.name) : p.name}</span>
+        <span class="dot" style="background:${safeColor(p.color)}"></span>
+        <span class="pname">${esc(lang === "am" ? (p.nameAm || p.name) : p.name)}</span>
         <span class="chip ${cls}">${label}</span>
       </div>
       <div class="pmeta">
-        <span>${p.code} · ${t("lastSeen")} <b>${ago(p.ts)}</b></span>
+        <span>${esc(p.code)} · ${t("lastSeen")} <b>${ago(p.ts)}</b></span>
         <span class="dist" title="${t("coveredToday")}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
