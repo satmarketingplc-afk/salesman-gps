@@ -208,28 +208,36 @@ const haversine = (a, b) => {
 const dayFile = (code, day) => path.join(ARCHIVE, "daily", day, `${code}.enc.json`);
 
 const loadDay = async (code, day) => {
+  const ck = `${code}|${day}`;
+  if (dayCacheEnabled && dayCache.has(ck)) return dayCache.get(ck);
   const file = dayFile(code, day);
   const box = await readJson(file, null);
-  if (!box) return [];
-  try {
-    const pings = decryptJson(box, PASS());
-    return Array.isArray(pings) ? pings : [];
-  } catch (err) {
-    // Quarantine the corrupt file instead of killing the whole pass: one bad day
-    // (wrong passphrase rotation, truncated commit) must not freeze every pin.
-    errorCount++;
+  let pings = [];
+  if (box) {
     try {
-      await fs.rename(file, file + ".corrupt-" + new Date().toISOString().slice(0, 10));
-      console.error(`[poller] quarantined ${file}: ${err.message}`);
-    } catch {
-      console.error(`[poller] cannot decrypt ${file}: ${err.message}`);
+      const dec = decryptJson(box, PASS());
+      pings = Array.isArray(dec) ? dec : [];
+    } catch (err) {
+      // Quarantine the corrupt file instead of killing the whole pass: one bad day
+      // (wrong passphrase rotation, truncated commit) must not freeze every pin.
+      errorCount++;
+      try {
+        await fs.rename(file, file + ".corrupt-" + new Date().toISOString().slice(0, 10));
+        console.error(`[poller] quarantined ${file}: ${err.message}`);
+      } catch {
+        console.error(`[poller] cannot decrypt ${file}: ${err.message}`);
+      }
+      // a corrupt file is NOT cached — the quarantine rename must be re-attempted cleanly
+      return [];
     }
-    return [];
   }
+  if (dayCacheEnabled) dayCache.set(ck, pings);
+  return pings;
 };
 
 const saveDay = async (code, day, pings) => {
   await writeJson(dayFile(code, day), encryptJson(pings, PASS()));
+  if (dayCacheEnabled) dayCache.set(`${code}|${day}`, pings);
 };
 
 // ---- customer cards -------------------------------------------------------
@@ -302,6 +310,11 @@ async function loadRoster() {
 // Exported for tests and the self-diagnosis script (scripts/diagnose.mjs) so the
 // whole pipeline can be exercised with a mocked Telegram API — no real bot needed.
 export { encryptJson, decryptJson };
+// Exposed for diagnose.mjs: read-only tooling must never let the pass cache outlive a call.
+export function setDayCache(enabled) {
+  dayCacheEnabled = !!enabled;
+  if (!dayCacheEnabled) dayCache.clear();
+}
 export async function runOnce(overrides = {}) {
   if (overrides.rosterFile) ROSTER_FILE = overrides.rosterFile;
   if (overrides.archiveDir) ARCHIVE = path.resolve(ROOT, overrides.archiveDir);
@@ -312,7 +325,19 @@ export async function runOnce(overrides = {}) {
   await main();
 }
 
+// ---- day-file read cache ---------------------------------------------------
+// One pass touches the same day files many times: every incoming ping of a salesman
+// re-reads their day file, and the live-payload build at the end reads today+yesterday
+// for every person again. Each read is a file open + JSON parse + AES-GCM decrypt (the
+// PBKDF2 key itself is cached in crypto.mjs). Cache decrypted pings per pass; saveDay
+// refreshes the entry so writes never go stale. The process exits after each pass, so
+// the cache can never serve data across a concurrent git merge.
+let dayCacheEnabled = true;
+const dayCache = new Map(); // "code|day" -> Array<ping>
+
 async function main() {
+  dayCacheEnabled = true;
+  dayCache.clear();
   const roster = await loadRoster();
   const byTg = new Map();
   const byUser = new Map();
@@ -393,7 +418,7 @@ async function main() {
     }
   }
 
-  const custMonths = new Map(); // month -> decrypted entries, loaded lazily
+  const custMonths = new Map(); // month -> { list, ids:Set }, loaded lazily
   const newCustomers = [];
 
   for (const u of updates) {
@@ -483,14 +508,16 @@ async function main() {
             fail(`cannot decrypt ${file} — wrong DASH_PASSPHRASE?`);
           }
         }
-        custMonths.set(month, list);
+        // id Set for O(1) duplicate checks (edit replays arrive every pass)
+        custMonths.set(month, { list, ids: new Set(list.map((c) => c.id)) });
       }
-      const list = custMonths.get(month);
-      if (list.some((c) => c.id === entry.id)) {
+      const bucket = custMonths.get(month);
+      if (bucket.ids.has(entry.id)) {
         skipped++;
         continue;
       }
-      list.push(entry);
+      bucket.list.push(entry);
+      bucket.ids.add(entry.id);
       newCustomers.push(entry);
       stored++;
       replied++;
@@ -544,7 +571,17 @@ async function main() {
     // The old "newer than the LAST point by MIN_INTERVAL_S" rule silently discarded
     // legitimate out-of-order replays older than the newest point (e.g. a burst of missed
     // updates arriving after a connectivity gap), permanently losing archive data.
-    if (pings.some((x) => x.ts === ping.ts)) {
+    // Day files are kept sorted, so a Set gives O(1) dedupe instead of scanning every
+    // stored ping for each incoming update.
+    if (!pings.tsSet) {
+      Object.defineProperty(pings, "tsSet", {
+        value: new Set(pings.map((x) => x.ts)),
+        enumerable: false,
+        writable: true,
+        configurable: true,
+      });
+    }
+    if (pings.tsSet.has(ping.ts)) {
       skipped++;
       continue;
     }
@@ -554,14 +591,17 @@ async function main() {
     let at = pings.length;
     while (at > 0 && Date.parse(pings[at - 1].ts) > Date.parse(ping.ts)) at--;
     pings.splice(at, 0, ping);
+    pings.tsSet.add(ping.ts);
     await saveDay(sm.code, day, pings);
     dirty.add(sm.code);
     stored++;
   }
 
   // persist the month files once per pass, then refresh the rolling view the page reads
-  for (const [month, list] of custMonths) {
+  for (const { list } of custMonths.values()) {
     list.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+  }
+  for (const [month, { list }] of custMonths) {
     await writeJson(custFile(month), encryptJson(list, PASS()));
   }
 
@@ -602,10 +642,12 @@ async function main() {
   let joined = 0;
   const stillPending = [];
   const appliedClaims = [];
+  // O(1) code lookup instead of scanning the roster once per pending claim
+  const byCode = new Map((roster.salesmen || []).map((s) => [s.code, s]));
   for (const p of pending || []) {
     if (!p?.code || !p?.tg) continue;
     if (byTg.has(String(p.tg))) continue; // already linked meanwhile
-    const sm = (roster.salesmen || []).find((s) => s.code === p.code);
+    const sm = byCode.get(p.code);
     if (!sm || !AUTO_ASSIGN) {
       // keep unknown codes in the queue (typo can be fixed by re-sending /join),
       // drop claims older than 30 days so the file cannot grow forever
@@ -637,15 +679,17 @@ async function main() {
   if (!appliedClaims.length && recoveryTgIds.size && unmapped.length) {
     // no fresh claims this pass, but old unmapped records may match existing links
     for (const rec of unmapped) {
-      const hit = (roster.salesmen || []).find((s) => s.tg && String(s.tg) === String(rec.tg));
-      if (hit) appliedClaims.push({ tg: String(rec.tg), code: hit.code });
+      const code = recoveryTgIds.get(String(rec.tg)); // O(1): was a full roster scan per record
+      if (code) appliedClaims.push({ tg: String(rec.tg), code });
     }
   }
   if (appliedClaims.length && unmapped.length) {
     const recoveredByCode = new Map(); // code -> [ping,...]
     const keptUnmapped = [];
+    // one claim lookup per unmapped tg id instead of a linear find() per record
+    const claimByTg = new Map(appliedClaims.map((p) => [String(p.tg), p]));
     for (const rec of unmapped) {
-      const claim = appliedClaims.find((p) => String(p.tg) === String(rec.tg));
+      const claim = claimByTg.get(String(rec.tg));
       if (!claim) {
         keptUnmapped.push(rec);
         continue;
@@ -693,6 +737,10 @@ async function main() {
   }
 
   // ---- encrypted live payload for the public dashboard ----
+  // From here on the pass only reads day files — it never writes them again. Reads are
+  // served from the per-pass cache (see loadDay), and the cache must not be mutated any
+  // more, so disable it: any hypothetical later write falls back to a clean disk read.
+  dayCacheEnabled = false;
   const now = Date.now();
   const live = [];
   let noTg = 0, noPoints = 0;
@@ -710,7 +758,11 @@ async function main() {
       const part = await loadDay(sm.code, day);
       if (part.length) { pings = [...pings, ...part]; }
     }
-    pings.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    // todayKeys is 1–2 sorted days: concatenating them is already ordered, so skip the
+    // full sort unless the payload actually arrives out of order (rare, but harmless)
+    if (pings.length > 1 && Date.parse(pings[0].ts) > Date.parse(pings[pings.length - 1].ts)) {
+      pings.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    }
     if (!pings.length) { noPoints++; console.warn(`[poller] ${sm.code} (${sm.name}) has no location points today — not on the map until they Share live location`); continue; }
     // whole day, so the line on the map matches the distance the card reports;
     // decimated to ~400 points: enough for the shape, small enough to commit every 2 min
@@ -719,11 +771,25 @@ async function main() {
     const trail = step > 1 ? raw.filter((_, i) => i % step === 0 || i === raw.length - 1) : raw;
     const last = pings[pings.length - 1];
 
-    // full-day distance, ignoring GPS jumps over 500 m between two pings
+    // full-day distance, ignoring GPS jumps over 500 m between two pings.
+    // No trig when the bounding box proves the points are ~metres apart — the common
+    // case for stationary or slow pings (GPS jitter sits well inside this fast path).
+    const DEG = Math.PI / 180;
+    const cosLat = (lat) => 0.99985 + 0.00015 * Math.cos(lat * DEG); // fast, ±0.02 % vs exact haversine
     let meters = 0;
+    let prev = pings[0];
     for (let i = 1; i < pings.length; i++) {
-      const step = haversine([pings[i - 1].lat, pings[i - 1].lng], [pings[i].lat, pings[i].lng]);
+      const cur = pings[i];
+      const dLat = (cur.lat - prev.lat) * 111195;               // metres per degree latitude
+      const dLng = (cur.lng - prev.lng) * 111320 * cosLat(prev.lat);
+      let step;
+      if (dLat * dLat + dLng * dLng < 250000) {                 // within ~500 m: flat-earth is exact enough
+        step = Math.hypot(dLat, dLng);
+      } else {
+        step = haversine([prev.lat, prev.lng], [cur.lat, cur.lng]);
+      }
       if (step < 500) meters += step;
+      prev = cur;
     }
 
     live.push({

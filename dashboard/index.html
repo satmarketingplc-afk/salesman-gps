@@ -311,7 +311,17 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.classList.remove("show"), 4500);
 }
 
-async function load() {
+// One in-flight load at a time: the 30 s interval and the post-nudge reload loop can
+// overlap on a slow connection — without this guard every overlap meant a duplicate
+// fetch AND a duplicate PBKDF2 derivation on the main thread.
+let loading = null;
+function load() {
+  if (loading) return loading;
+  loading = loadOnce().finally(() => { loading = null; });
+  return loading;
+}
+
+async function loadOnce() {
   let pass = sessionStorage.getItem("smgps_pass");
   if (pass && pass !== pass.trim()) {
     // Self-heal entries stored by older builds that kept copy-paste whitespace.
@@ -371,6 +381,7 @@ function draw(fit = true) {
   layers = [];
   if (!data) return;
 
+  const bounds = L.latLngBounds([]); // accumulate while drawing — no second featureGroup pass
   data.salesmen.forEach((p) => {
     const color = safeColor(p.color);
     if (p.trail && p.trail.length > 1) {
@@ -386,6 +397,7 @@ function draw(fit = true) {
       }).addTo(map);
       start.bindTooltip(t("start"), { direction: "top", offset: [0, -7], className: "pinlabel" });
       layers.push(start);
+      for (let i = 0; i < p.trail.length; i++) bounds.extend(p.trail[i]);
     }
     if (p.acc) {
       layers.push(L.circle([p.lat, p.lng], {
@@ -412,9 +424,10 @@ function draw(fit = true) {
     });
     dot.on("click", () => setActive(p.code, false));
     layers.push(dot);
+    bounds.extend([p.lat, p.lng]);
   });
 
-  if (fit && layers.length) map.fitBounds(L.featureGroup(layers).getBounds().pad(0.25), { maxZoom: 15 });
+  if (fit && bounds.isValid()) map.fitBounds(bounds.pad(0.25), { maxZoom: 15 });
 }
 
 function setActive(code, fly = true) {

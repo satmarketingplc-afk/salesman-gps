@@ -272,6 +272,15 @@ async function decrypt(payload, passphrase) {
 })();
 const DATA_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO_NAME}/main/dashboard/public/customers.enc.json`;
 
+// One in-flight load at a time — manual refreshes and any future auto-refresh must not
+// stack duplicate fetches + PBKDF2 derivations on slow connections.
+let loading = null;
+function load() {
+  if (loading) return loading;
+  loading = loadOnce().finally(() => { loading = null; });
+  return loading;
+}
+
 const escapeHtml = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 
