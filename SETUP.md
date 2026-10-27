@@ -96,8 +96,9 @@ start command and the health check.
 | `DASH_PASSPHRASE` | `SalesMap-2026-Addis` (same as GitHub secret) | yes |
 | `GH_DISPATCH_TOKEN` | fine-grained PAT, **Actions: write**, this repo | optional |
 
-With `GH_DISPATCH_TOKEN` set, Refresh also starts a poll run immediately, so a new point
-appears in ~20 seconds instead of waiting for the next run (≤ 5 min).
+With `GH_DISPATCH_TOKEN` set, Refresh also starts a poll run immediately, so the new point is
+committed about 2 minutes later instead of waiting for the next run (≤ 5 min); the raw CDN
+can add a few more minutes before every browser sees it.
 
 ### What Refresh does
 
