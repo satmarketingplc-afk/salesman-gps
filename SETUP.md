@@ -71,18 +71,29 @@ The mock only writes `dashboard/public/live.enc.json`; do not commit it over the
 
 ---
 
-## 5. Hosting on Render (web service)
+## 5. Hosting
 
-The page itself is static, but the **Refresh** button needs a place to keep the bot token,
-so Render runs one small Node process (`server/index.mjs`, no dependencies):
+### Default: GitHub Pages — no server, nothing to keep alive
+
+Repo → Settings → Pages → Source: **GitHub Actions** (already set). Every push publishes
+`/`, `/dashboard/` and `/app/`. The dashboard reads the encrypted payload straight from
+`raw.githubusercontent.com`, so Pages only serves HTML/CSS/JS.
+
+On Pages the **Refresh** button is a plain reload. A new point appears with the next poll
+(≤ 5 min) after the salesman shares his location — the delay you already accepted.
+
+### Optional: Render, only to make Refresh ask the team
+
+Everything below is optional. A static page must never hold the bot token, so the one-tap
+"where are you now" needs a small server (`server/index.mjs`, no dependencies):
 
 - serves the launcher, the dashboard and the salesman app,
 - answers `POST /api/nudge` by asking the team on Telegram for a fresh point,
 - answers `/healthz` for the keep-alive pings.
 
 Data still lives in GitHub: the page reads positions from `raw.githubusercontent.com`, and
-the Action keeps writing there. GitHub Pages can stay as a read-only mirror — on Pages the
-Refresh button simply reloads (no `/api`), everything else is identical.
+the Action keeps writing there. GitHub Pages keeps working as a read-only mirror — on Pages
+the Refresh button simply reloads (no `/api`), everything else is identical.
 
 **Deploy:** Render → **New → Blueprint** → pick `satmarketingplc-afk/salesman-gps`.
 `render.yaml` sets the build (copies `index.html`, `app/`, `dashboard/` into `dist/`), the
