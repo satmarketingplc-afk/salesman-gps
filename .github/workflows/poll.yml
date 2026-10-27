@@ -7,7 +7,9 @@ on:
 
 concurrency:
   group: telegram-poll
-  cancel-in-progress: true
+  # never cancel a pass mid-flight — it would lose the uncommitted archive and offset;
+  # queue instead (the chained dispatch + cron keep the cadence)
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -18,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4 # pin to a full SHA in production (e.g. @v4.1.7 -> <sha>)
         with:
           fetch-depth: 1
 
@@ -75,7 +77,14 @@ jobs:
                   # (a reset would silently delete files added during the run) and keeping
                   # our regenerated archive/live payload.
                   git fetch -q origin main
-                  git merge -q --no-edit -X ours FETCH_HEAD || git merge --abort || true
+                  # -X ours silently discards remote changes on ANY conflicting file.
+                  # Restrict the rerere-style safety net to our own regenerated paths:
+                  # if the conflict touches anything else, fail loudly so a human looks.
+                  if ! git merge -q --no-edit -X ours FETCH_HEAD; then
+                    git merge --abort || true
+                    echo "merge conflict outside our paths — NOT pushing, manual check needed"
+                    exit 1
+                  fi
                   git push -q origin HEAD:main || echo "push still blocked, next pass will retry"
                 fi
               fi

@@ -70,9 +70,40 @@ const NUDGE_KEYBOARD = {
   one_time_keyboard: true,
 };
 
-let rosterCache = { at: 0, roster: null };
+let rosterCache = { at: 0, roster: null, inflight: null };
 let lastNudgeAt = 0;
 const lastPerPerson = new Map();
+
+// Nudge cooldowns survive a restart/sleep (Render free tier restarts often):
+// small JSON next to the repo root, overridable with NUDGE_STATE_FILE.
+const NUDGE_STATE_FILE = path.resolve(ROOT, process.env.NUDGE_STATE_FILE || "private/nudge-state.json");
+
+async function loadNudgeState() {
+  try {
+    const s = JSON.parse(await fs.readFile(NUDGE_STATE_FILE, "utf8"));
+    if (typeof s.lastNudgeAt === "number") lastNudgeAt = s.lastNudgeAt;
+    if (s.lastPerPerson && typeof s.lastPerPerson === "object") {
+      for (const [k, v] of Object.entries(s.lastPerPerson)) {
+        if (Date.now() - v < 24 * 3600_000) lastPerPerson.set(k, v);
+      }
+    }
+  } catch {
+    /* first run — no state yet */
+  }
+}
+
+async function saveNudgeState() {
+  try {
+    const obj = {};
+    for (const [k, v] of lastPerPerson) obj[k] = v;
+    await fs.mkdir(path.dirname(NUDGE_STATE_FILE), { recursive: true });
+    await fs.writeFile(NUDGE_STATE_FILE, JSON.stringify({ lastNudgeAt, lastPerPerson: obj }));
+  } catch (err) {
+    console.warn("[server] cannot persist nudge state:", err.message);
+  }
+}
+
+loadNudgeState();
 
 function json(res, status, body, extraHeaders = {}) {
   const data = JSON.stringify(body);
@@ -106,12 +137,22 @@ async function readBody(req, limit = 4096) {
 
 async function loadRoster() {
   if (rosterCache.roster && Date.now() - rosterCache.at < ROSTER_TTL_MS) return rosterCache.roster;
-  const raw = ROSTER_FILE
-    ? await fs.readFile(ROSTER_FILE, "utf8")
-    : await (await fetch(ROSTER_URL, { cache: "no-store" })).text();
-  const roster = decryptJson(JSON.parse(raw), PASS);
-  rosterCache = { at: Date.now(), roster };
-  return roster;
+  // share one in-flight fetch between concurrent requests (no stampede on raw.githubusercontent)
+  if (rosterCache.inflight) return rosterCache.inflight;
+  rosterCache.inflight = (async () => {
+    try {
+      const raw = ROSTER_FILE
+        ? await fs.readFile(ROSTER_FILE, "utf8")
+        : await (await fetch(ROSTER_URL, { cache: "no-store" })).text();
+      const roster = decryptJson(JSON.parse(raw), PASS);
+      rosterCache = { at: Date.now(), roster, inflight: null };
+      return roster;
+    } catch (err) {
+      rosterCache.inflight = null;
+      throw err;
+    }
+  })();
+  return rosterCache.inflight;
 }
 
 async function telegram(method, payload) {
@@ -159,6 +200,7 @@ async function nudge(req, res) {
   if (!PASS) return json(res, 503, { ok: false, error: "not_configured" });
   if (!safeEqual(body.pass || "", PASS)) {
     await new Promise((r) => setTimeout(r, 400)); // slow down guessing
+    console.warn(`[server] failed nudge auth from ${req.socket.remoteAddress || "?"}`);
     return json(res, 401, { ok: false, error: "wrong_pass" });
   }
   if (!TOKEN) return json(res, 503, { ok: false, error: "no_bot_token" });
@@ -206,6 +248,9 @@ async function nudge(req, res) {
 
   const dispatched = await dispatchPoll();
 
+  // persist cooldown state so a restart/sleep does not let people be re-nudged instantly
+  await saveNudgeState();
+
   // everyone was recently asked — tell the manager instead of pretending it worked
   if (!sent.length) {
     return json(res, 429, {
@@ -220,11 +265,33 @@ async function nudge(req, res) {
   json(res, 200, { ok: true, sent, skipped, failed, dispatched });
 }
 
+const CSP = [
+  "default-src 'self'",
+  // the dashboard loads Leaflet from unpkg (script + its marker images) and draws
+  // inline SVG data-URI pins, so those hosts/schemes are allow-listed explicitly
+  "script-src 'self' https://unpkg.com",
+  "style-src 'self' 'unsafe-inline' https://unpkg.com",
+  "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://unpkg.com",
+  "connect-src 'self' https://raw.githubusercontent.com https://api.github.com",
+  "frame-ancestors 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join("; ");
+
 async function serveStatic(req, res, pathname) {
   let rel = decodeURIComponent(pathname);
+  if (rel.includes("\0")) return json(res, 400, { ok: false, error: "bad_path" });
   if (rel.endsWith("/")) rel += "index.html";
   const file = path.resolve(DIST, "." + rel);
-  if (!file.startsWith(DIST + path.sep) && file !== path.join(DIST, "index.html")) {
+  const rootWithSep = DIST.endsWith(path.sep) ? DIST : DIST + path.sep;
+  if (file !== DIST && !file.startsWith(rootWithSep)) {
+    return json(res, 403, { ok: false, error: "forbidden" });
+  }
+  // never hand out encrypted payloads or local state over HTTP — the dashboard reads
+  // them straight from raw.githubusercontent.com; serving them here leaks ciphertext
+  // into caches and enables passphrase-guessing offline
+  const relFromDist = path.relative(DIST, file);
+  if (/(^|[\\/])private[\\/]|\.enc\.json$|\.corrupt-|nudge-state\.json/.test(relFromDist)) {
     return json(res, 403, { ok: false, error: "forbidden" });
   }
   let stat;
@@ -233,21 +300,40 @@ async function serveStatic(req, res, pathname) {
   } catch {
     return json(res, 404, { ok: false, error: "not_found" });
   }
-  if (stat.isDirectory()) return serveStatic(req, res, rel.replace(/\/*$/, "/"));
+  if (stat.isDirectory()) {
+    // only one level of index.html fallback; a directory without one is a 404, not a loop
+    try {
+      stat = await fs.stat(path.join(file, "index.html"));
+      return serveFile(req, res, path.join(file, "index.html"), stat);
+    } catch {
+      return json(res, 404, { ok: false, error: "not_found" });
+    }
+  }
+  return serveFile(req, res, file, stat);
+}
+
+async function serveFile(req, res, file, stat) {
   const ext = path.extname(file).toLowerCase();
+  const etag = `W/"${stat.size}-${Number(stat.mtimeMs).toString(36)}"`;
+  if (req.headers["if-none-match"] === etag) {
+    res.writeHead(304, { etag });
+    return res.end();
+  }
   const headers = {
     "content-type": MIME[ext] || "application/octet-stream",
     "content-length": stat.size,
     "cache-control": ext === ".html" ? "no-cache" : "public, max-age=300",
     "referrer-policy": "no-referrer",
-    "x-frame-options": "SAMEORIGIN",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": CSP,
+    etag,
   };
   if (req.method === "HEAD") {
     res.writeHead(200, headers);
     return res.end();
   }
   res.writeHead(200, headers);
-  createReadStream(file).pipe(res);
+  createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
 
 const server = http.createServer(async (req, res) => {

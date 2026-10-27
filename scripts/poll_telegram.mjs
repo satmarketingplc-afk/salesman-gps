@@ -27,10 +27,17 @@ const PASS = process.env.DASH_PASSPHRASE || "";
 const EAT_MS = 3 * 3600 * 1000;
 const ONLINE_MS = Number(process.env.ONLINE_MS || 10 * 60 * 1000);
 const TRAIL_POINTS = 3000;
-const MIN_MOVE_M = 8;
+// Time-based dedupe (was distance-based): while a person stands still Telegram keeps
+// re-sending the same coordinates every 15 s. Dropping points closer than 8 m froze the
+// trail and let the pin fall "offline" even though the salesman was sharing. Now we keep
+// one point per MIN_INTERVAL_S per live session, so a stationary person still produces a
+// point every minute and stays online.
+const MIN_INTERVAL_S = Number(process.env.MIN_INTERVAL_S || 60);
 const API = process.env.TELEGRAM_API_BASE || "https://api.telegram.org";
 const CUSTOMER_URL =
   process.env.CUSTOMER_URL || "https://satmarketingplc-afk.github.io/salesman-gps/app/customer/";
+
+let errorCount = 0; // corrupt day files etc. — surfaced in the summary line
 
 if (!TOKEN) fail("TELEGRAM_BOT_TOKEN is not set");
 if (PASS.length < 8) fail("DASH_PASSPHRASE must be at least 8 characters");
@@ -41,20 +48,31 @@ function fail(msg) {
 }
 
 async function tg(method, payload) {
-  try {
-    const res = await fetch(`${API}/bot${TOKEN}/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15000),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!body.ok) console.warn(`[poller] ${method}: ${body.description || res.status}`);
-    return body.ok;
-  } catch (err) {
-    console.warn(`[poller] ${method}: ${err.message}`);
-    return false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`${API}/bot${TOKEN}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15000),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (body.ok) return true;
+      // 429 too-many-requests: wait out retry_after, then retry once
+      const ra = body.parameters?.retry_after;
+      if (res.status === 429 && Number.isFinite(ra) && attempt === 0) {
+        console.warn(`[poller] ${method}: 429, backing off ${ra}s`);
+        await new Promise((r) => setTimeout(r, Math.min(Number(ra), 30) * 1000));
+        continue;
+      }
+      console.warn(`[poller] ${method}: ${body.description || res.status}`);
+      return false;
+    } catch (err) {
+      console.warn(`[poller] ${method}: ${err.message}`);
+      return false;
+    }
   }
+  return false;
 }
 
 const esc = (s) =>
@@ -113,12 +131,23 @@ const haversine = (a, b) => {
 const dayFile = (code, day) => path.join(ARCHIVE, "daily", day, `${code}.enc.json`);
 
 const loadDay = async (code, day) => {
-  const box = await readJson(dayFile(code, day), null);
+  const file = dayFile(code, day);
+  const box = await readJson(file, null);
   if (!box) return [];
   try {
-    return decryptJson(box, PASS);
-  } catch {
-    fail(`cannot decrypt ${dayFile(code, day)} — wrong DASH_PASSPHRASE?`);
+    const pings = decryptJson(box, PASS);
+    return Array.isArray(pings) ? pings : [];
+  } catch (err) {
+    // Quarantine the corrupt file instead of killing the whole pass: one bad day
+    // (wrong passphrase rotation, truncated commit) must not freeze every pin.
+    errorCount++;
+    try {
+      await fs.rename(file, file + ".corrupt-" + new Date().toISOString().slice(0, 10));
+      console.error(`[poller] quarantined ${file}: ${err.message}`);
+    } catch {
+      console.error(`[poller] cannot decrypt ${file}: ${err.message}`);
+    }
+    return [];
   }
 };
 
@@ -342,12 +371,17 @@ async function main() {
     };
 
     if (!sm) {
-      unmapped.push({
-        ...ping,
-        tg: String(from.id),
-        who: from.first_name || null,
-        username: from.username || null,
-      });
+      // stable key tg+ts: replayed updates (offset committed only hourly) must not
+      // pile up duplicates in the unmapped file
+      const key = `${from.id}|${ping.ts}`;
+      if (!unmapped.some((x) => `${x.tg}|${x.ts}` === key)) {
+        unmapped.push({
+          ...ping,
+          tg: String(from.id),
+          who: from.first_name || null,
+          username: from.username || null,
+        });
+      }
       skipped++;
       continue;
     }
@@ -355,10 +389,11 @@ async function main() {
     const day = dayKey(ts);
     const pings = await loadDay(sm.code, day);
     const last = pings[pings.length - 1];
+    // Time-based dedupe: keep a point when it is at least MIN_INTERVAL_S newer than the
+    // last one. Exact re-sends (same coords AND same timestamp, replayed updates) are
+    // always dropped; stationary people still get a heartbeat point every minute.
     const duplicate =
-      last &&
-      (Date.parse(ping.ts) <= Date.parse(last.ts) ||
-        haversine([last.lat, last.lng], [ping.lat, ping.lng]) < MIN_MOVE_M);
+      last && Date.parse(ping.ts) - Date.parse(last.ts) < MIN_INTERVAL_S * 1000;
     if (duplicate) {
       skipped++;
       continue;
@@ -477,7 +512,7 @@ async function main() {
   console.log(
     `[poller] updates=${updates.length} stored=${stored} skipped=${skipped} ` +
       `cards=${newCustomers.length} replied=${replied} people=${live.length} ` +
-      `dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
+      `errors=${errorCount} dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
   );
 }
 
