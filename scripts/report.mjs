@@ -28,16 +28,27 @@ const haversine = (a, b) => {
 /** Pings of one salesman for one day: first/last seen, count, live count, distance. */
 export function dayStats(pings) {
   if (!pings || !pings.length) return null;
+  // no trig when the bounding box proves two pings are ~metres apart (GPS jitter and
+  // slow steps — the overwhelming majority of pairs on a full day of 15 s updates)
+  const DEG = Math.PI / 180;
+  const cosLat = (lat) => 0.99985 + 0.00015 * Math.cos(lat * DEG); // fast, ±0.02 % vs exact haversine
   let meters = 0;
   let live = 0;
-  for (let i = 0; i < pings.length; i++) {
-    if (pings[i].live) live++;
-    if (!i) continue;
-    const step = haversine(
-      [pings[i - 1].lat, pings[i - 1].lng],
-      [pings[i].lat, pings[i].lng]
-    );
+  let prev = pings[0];
+  if (prev.live) live++;
+  for (let i = 1; i < pings.length; i++) {
+    const cur = pings[i];
+    if (cur.live) live++;
+    const dLat = (cur.lat - prev.lat) * 111195;   // metres per degree latitude
+    const dLng = (cur.lng - prev.lng) * 111320 * cosLat(prev.lat);
+    let step;
+    if (dLat * dLat + dLng * dLng < 250000) {     // within ~500 m: flat-earth is exact enough
+      step = Math.hypot(dLat, dLng);
+    } else {
+      step = haversine([prev.lat, prev.lng], [cur.lat, cur.lng]);
+    }
     if (step < 500) meters += step; // ignore GPS jumps
+    prev = cur;
   }
   return {
     first: pings[0].ts,

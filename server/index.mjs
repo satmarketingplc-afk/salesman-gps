@@ -24,6 +24,7 @@ import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { decryptJson } from "../scripts/crypto.mjs";
 
@@ -123,7 +124,7 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ba, bb);
 }
 
-async function readBody(req, limit = 4096) {
+async function readBody(req, limit = 16384) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -226,24 +227,36 @@ async function nudge(req, res) {
   const skipped = [];
   const failed = [];
 
-  for (const sm of roster.salesmen || []) {
-    if (sm.active === false || !sm.tg) continue;
+  // Telegram rate-limits per chat (~1 msg/s) and globally (~30/s). Sending one-by-one
+  // with a round-trip each was the slow part of /api/nudge; fire in small concurrent
+  // batches so a full team is reached in seconds without tripping the limits.
+  const targets = (roster.salesmen || []).filter((sm) => {
+    if (sm.active === false || !sm.tg) return false;
     if (now - (lastPerPerson.get(sm.tg) || 0) < PERSON_COOLDOWN_MS) {
       skipped.push(sm.code);
-      continue;
+      return false;
     }
-    try {
-      await telegram("sendMessage", {
-        chat_id: sm.tg,
-        text: NUDGE_TEXT,
-        parse_mode: "HTML",
-        reply_markup: NUDGE_KEYBOARD,
-      });
-      lastPerPerson.set(sm.tg, now);
-      sent.push(sm.code);
-    } catch {
-      failed.push(sm.code);
-    }
+    return true;
+  });
+
+  for (let i = 0; i < targets.length; i += 5) {
+    const batch = targets.slice(i, i + 5);
+    await Promise.all(
+      batch.map(async (sm) => {
+        try {
+          await telegram("sendMessage", {
+            chat_id: sm.tg,
+            text: NUDGE_TEXT,
+            parse_mode: "HTML",
+            reply_markup: NUDGE_KEYBOARD,
+          });
+          lastPerPerson.set(sm.tg, now);
+          sent.push(sm.code);
+        } catch {
+          failed.push(sm.code);
+        }
+      })
+    );
   }
 
   const dispatched = await dispatchPoll();
@@ -328,6 +341,22 @@ async function serveFile(req, res, file, stat) {
     "content-security-policy": CSP,
     etag,
   };
+  // gzip compressible text assets: the pages inline their whole app (~20-30 KB), so
+  // this cuts first paint on slow mobile connections by ~70 % of the transferred bytes
+  const compressible = ext === ".html" || ext === ".js" || ext === ".mjs" || ext === ".css" || ext === ".json" || ext === ".svg" || ext === ".webmanifest" || ext === ".txt";
+  if (compressible && /\bgzip\b/.test(req.headers["accept-encoding"] || "") && stat.size > 1024) {
+    headers["content-encoding"] = "gzip";
+    headers["vary"] = "accept-encoding";
+    delete headers["content-length"];
+    res.writeHead(200, headers);
+    if (req.method === "HEAD") return res.end();
+    createReadStream(file)
+      .on("error", () => res.destroy())
+      .pipe(zlib.createGzip({ level: zlib.constants.Z_BEST_SPEED }))
+      .on("error", () => res.destroy())
+      .pipe(res);
+    return;
+  }
   if (req.method === "HEAD") {
     res.writeHead(200, headers);
     return res.end();
