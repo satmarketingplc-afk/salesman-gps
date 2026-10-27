@@ -77,6 +77,9 @@
     color:var(--muted); display:flex; gap:16px; flex-wrap:wrap;
   }
   @media (max-width:820px){
+    header{gap:8px; padding:10px 14px}
+    .status, #refresh{display:none}
+    .brand b{font-size:16px}
     main{flex-direction:column-reverse}
     aside{width:100%; max-height:44vh; border-right:0; border-top:1px solid var(--line)}
     #map{min-height:52vh}
@@ -286,8 +289,9 @@ function render() {
 
   list.innerHTML = "";
   data.salesmen.forEach((p) => {
-    const cls = p.online ? "on" : (Date.now() - Date.parse(p.ts) < 15 * 60 * 1000 ? "stale" : "off");
-    const label = p.online ? t("online") : (cls === "stale" ? t("stale") : t("off"));
+    const recent = Date.now() - Date.parse(p.ts);
+    const cls = p.live ? "on" : (recent < 15 * 60 * 1000 ? "stale" : "off");
+    const label = p.live ? t("online") : (cls === "stale" ? t("stale") : t("off"));
     const km = distanceKm(p.trail).toFixed(1);
 
     const card = document.createElement("div");
