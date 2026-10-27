@@ -1,5 +1,9 @@
 name: poll-telegram
 
+# Cron-only cadence: the run used to dispatch itself again at the end of every pass
+# ("chain the next run"). That burned free-tier Actions minutes and — worse — each chain
+# produced a fresh commit whose author was the GitHub Actions bot, bloating git history.
+# The 5-minute cron below is now the single scheduler; nothing self-dispatches.
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -8,12 +12,11 @@ on:
 concurrency:
   group: telegram-poll
   # never cancel a pass mid-flight — it would lose the uncommitted archive and offset;
-  # queue instead (the chained dispatch + cron keep the cadence)
+  # queue instead (the cron keeps the cadence)
   cancel-in-progress: false
 
 permissions:
   contents: write
-  actions: write
 
 jobs:
   poll:
@@ -33,15 +36,15 @@ jobs:
           git config user.name  "smgps-bot"
           git config user.email "smgps-bot@users.noreply.github.com"
 
-      - name: Poll loop (4.5 min, every 15 s)
+      - name: Poll loop (~4 min, every 15 s; commits on the first, middle and last pass)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           DASH_PASSPHRASE: ${{ secrets.DASH_PASSPHRASE }}
         run: |
           set -u
-          for i in $(seq 1 18); do
+          for i in $(seq 1 16); do
             commit_pass=""
-            if [ $((i % 8)) -eq 0 ] || [ "$i" -eq 18 ]; then commit_pass=1; fi
+            if [ $((i % 9)) -eq 0 ] || [ "$i" -eq 16 ]; then commit_pass=1; fi
 
             # Free-tier economy: the live payload (small) commits every pass, while the
             # archive + offset + report land at most once an hour. Git stores a full copy of
@@ -116,16 +119,3 @@ jobs:
 
             sleep 15
           done
-
-      - name: Chain the next run
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          code=$(curl -s -o /tmp/chain.json -w "%{http_code}" -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/poll.yml/dispatches" \
-            -d '{"ref":"main"}')
-          echo "chain dispatch -> HTTP $code"
-          cat /tmp/chain.json
