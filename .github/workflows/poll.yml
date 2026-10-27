@@ -38,7 +38,11 @@ jobs:
         run: |
           set -u
           for i in $(seq 1 18); do
-            node scripts/poll_telegram.mjs || echo "poll failed, continuing"
+            # rebuild the daily activity report on the passes that commit (not every 15 s:
+            # each archive file needs its own PBKDF2 key)
+            build_reports=""
+            if [ $((i % 8)) -eq 0 ] || [ "$i" -eq 18 ]; then build_reports=1; fi
+            BUILD_REPORTS="$build_reports" node scripts/poll_telegram.mjs || echo "poll failed, continuing"
 
             # commit every 8th pass (~2 min) + the last one: the dashboard reads through a
             # CDN anyway, and every commit triggers a Pages/Render rebuild we don't need.

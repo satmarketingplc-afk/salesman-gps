@@ -142,6 +142,28 @@ rebuild is never needed for data. Deploy manually after a code change.
 
 ---
 
+## 7. Activity reports
+
+`/reports/` — same passphrase as the map (if you already unlocked the map, it opens directly).
+
+- one row per salesman per day: first seen, last seen, points, live points, km
+- summary cards for the newest day, plus up to 7 days of history
+- search by name or code, **CSV** button for Excel / Google Sheets
+- Amharic / English toggle; names switch too
+
+The poller rebuilds `dashboard/public/reports.enc.json` on every commit pass, from the same
+encrypted archive — nothing leaves the repo. To rebuild by hand (e.g. after importing old days):
+
+```powershell
+$env:DASH_PASSPHRASE="..."
+node scripts/reports_cli.mjs            # REPORT_DAYS=14 to widen the window
+```
+
+The map now draws the **whole day's trace** (decimated to ~1200 points) and marks where the
+day started, so the line and the `km` figure describe the same walk.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
