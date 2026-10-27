@@ -626,6 +626,21 @@ async function main() {
   // After /join links them, those points used to stay invisible until the NEXT share.
   // Now we move matching unmapped points into their day files immediately, so the
   // pin and trail appear on this very pass — zero manual steps.
+  // Recovery also runs for salesmen linked EARLIER passes (roster ids, manual edits):
+  // the poller only sees updates newer than its committed offset, so pre-link pings
+  // that arrived before someone was mapped would otherwise sit in the unmapped pile
+  // forever even though the person is now visible-worthy.
+  const recoveryTgIds = new Map(appliedClaims.map((p) => [String(p.tg), p.code]));
+  for (const sm of roster.salesmen || []) {
+    if (sm.tg) recoveryTgIds.set(String(sm.tg), sm.code);
+  }
+  if (!appliedClaims.length && recoveryTgIds.size && unmapped.length) {
+    // no fresh claims this pass, but old unmapped records may match existing links
+    for (const rec of unmapped) {
+      const hit = (roster.salesmen || []).find((s) => s.tg && String(s.tg) === String(rec.tg));
+      if (hit) appliedClaims.push({ tg: String(rec.tg), code: hit.code });
+    }
+  }
   if (appliedClaims.length && unmapped.length) {
     const recoveredByCode = new Map(); // code -> [ping,...]
     const keptUnmapped = [];
