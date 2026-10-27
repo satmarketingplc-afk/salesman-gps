@@ -70,6 +70,10 @@ jobs:
               if [ -n "$archive_due" ]; then
                 git add archive/daily archive/unmapped.enc.json archive/state dashboard/public/reports.enc.json
               fi
+              # self-service /join: roster + pending queue only change when someone links,
+              # and both files are encrypted — safe to commit, tiny, rare
+              if [ -f private/roster.enc.json ]; then git add private/roster.enc.json; fi
+              if [ -f private/pending.enc.json ]; then git add private/pending.enc.json; fi
               if ! git diff --cached --quiet; then
                 git commit -q -m "pings $(date -u +%FT%TZ)"
                 if ! git push -q origin HEAD:main; then
@@ -77,13 +81,33 @@ jobs:
                   # (a reset would silently delete files added during the run) and keeping
                   # our regenerated archive/live payload.
                   git fetch -q origin main
+                  # The roster is the one file where BOTH sides carry data we must keep
+                  # (each pass auto-links different salesmen via /join). Union it before
+                  # the blanket merge so -X ours can never drop a link. Do not write into
+                  # the working tree here: that would make `git merge` refuse to run.
+                  REMOTE_ROSTER=""
+                  if git show FETCH_HEAD:private/roster.enc.json >/dev/null 2>&1; then
+                    REMOTE_ROSTER=$(mktemp)
+                    git show FETCH_HEAD:private/roster.enc.json > "$REMOTE_ROSTER"
+                  fi
                   # -X ours silently discards remote changes on ANY conflicting file.
                   # Restrict the rerere-style safety net to our own regenerated paths:
                   # if the conflict touches anything else, fail loudly so a human looks.
                   if ! git merge -q --no-edit -X ours FETCH_HEAD; then
                     git merge --abort || true
+                    [ -n "$REMOTE_ROSTER" ] && rm -f "$REMOTE_ROSTER"
                     echo "merge conflict outside our paths — NOT pushing, manual check needed"
                     exit 1
+                  fi
+                  if [ -n "$REMOTE_ROSTER" ]; then
+                    node scripts/merge_rosters.mjs \
+                      private/roster.enc.json "$REMOTE_ROSTER" private/roster.enc.json \
+                      || echo "roster merge skipped"
+                    rm -f "$REMOTE_ROSTER"
+                    if ! git diff --quiet -- private/roster.enc.json; then
+                      git add private/roster.enc.json
+                      git commit -q -m "roster union $(date -u +%FT%TZ)"
+                    fi
                   fi
                   git push -q origin HEAD:main || echo "push still blocked, next pass will retry"
                 fi

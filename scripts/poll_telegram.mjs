@@ -10,6 +10,10 @@
  *   ROSTER_FILE          encrypted roster         (default ./private/roster.enc.json)
  *   OUT_DIR              dashboard payload dir    (default ./dashboard/public)
  *   BUILD_REPORTS        set to 1 to rebuild the daily activity report on that pass
+ *   AUTO_ASSIGN          1 (default): self-service Telegram id pairing — a person sends
+ *                        /join CODE and is mapped automatically, no CLI needed.
+ *                        Set to 0 to keep the roster strictly manual.
+ *   JOIN_SECRET          optional extra word required in /join CODE SECRET
  */
 
 import fs from "node:fs/promises";
@@ -34,10 +38,13 @@ const TRAIL_POINTS = 3000;
 // point every minute and stays online.
 const MIN_INTERVAL_S = Number(process.env.MIN_INTERVAL_S || 60);
 const API = process.env.TELEGRAM_API_BASE || "https://api.telegram.org";
+const AUTO_ASSIGN = process.env.AUTO_ASSIGN !== "0";
+const JOIN_SECRET = (process.env.JOIN_SECRET || "").trim();
 const CUSTOMER_URL =
   process.env.CUSTOMER_URL || "https://satmarketingplc-afk.github.io/salesman-gps/app/customer/";
 
 let errorCount = 0; // corrupt day files etc. — surfaced in the summary line
+let rosterByTg = new Map(); // set by main(): tg id -> salesman, used by /join replies
 
 if (!TOKEN) fail("TELEGRAM_BOT_TOKEN is not set");
 if (PASS.length < 8) fail("DASH_PASSPHRASE must be at least 8 characters");
@@ -101,6 +108,73 @@ const welcomeKeyboard = {
     [{ text: "🧾 New customer · አዲስ ደንበኛ", web_app: { url: CUSTOMER_URL } }],
   ],
 };
+
+// ---- self-service id pairing ---------------------------------------------
+// The roster is encrypted, so the bot cannot write it from Telegram directly.
+// Instead /join CODE records a pending claim in private/pending.enc.json; the
+// office approves it by committing (or applying) that file — no manual typing
+// of numeric ids, and the passphrase never leaves the server/workflow.
+const PENDING_FILE = path.join(path.dirname(ROSTER_FILE), "pending.enc.json");
+const joinText = () =>
+  [
+    "🔗 <b>Link your account · ታገናኙ</b>",
+    "Send the office manager your name, then type:",
+    "<code>/join SM-001</code>",
+    "(the code looks like <code>SM-001</code> and comes from the office)",
+    "────────",
+    "ስምዎን ለሥራ አስኪያጁ ይላኩ፣ ከዚያ ይጻፉ፦ <code>/join SM-001</code>",
+  ].join("\n");
+
+async function recordJoin(pending, from, codeRaw) {
+  const code = String(codeRaw || "").trim().toUpperCase().replace(/^#/, "");
+  const tgId = String(from.id);
+  if (!/^[A-Z0-9][A-Z0-9_-]{0,15}$/.test(code)) {
+    await tg("sendMessage", {
+      chat_id: from.id,
+      text: `❌ Unknown code. Use e.g. <code>/join SM-001</code>\n❌ የተሳሳተ ኮድ። ለምሳሌ <code>/join SM-001</code> ይጠቀሙ`,
+      parse_mode: "HTML",
+    });
+    return false;
+  }
+  if (rosterByTg.has(tgId)) {
+    const mine = rosterByTg.get(tgId);
+    await tg("sendMessage", {
+      chat_id: from.id,
+      text: `✅ Already linked as <b>${esc(mine?.code || "")} ${esc(mine?.name || "")}</b>. Just share your live location.\n✅ ተያይዘዋል። ቀጥታ አካባቢዎን ያጋሩ።`,
+      parse_mode: "HTML",
+    });
+    return false;
+  }
+  const dup = pending.find((p) => p.code === code && String(p.tg) !== tgId);
+  if (dup) {
+    await tg("sendMessage", {
+      chat_id: from.id,
+      text: `⚠️ Code <b>${esc(code)}</b> is already claimed by someone else. Ask the office for your own code.\n⚠️ ይህ ኮድ ለላ ሰው ተይዟል። ለቢሮው ይጠይቁ።`,
+      parse_mode: "HTML",
+    });
+    return false;
+  }
+  const entry = {
+    code,
+    tg: tgId,
+    who: [from.first_name, from.last_name].filter(Boolean).join(" ") || null,
+    username: from.username || null,
+    ts: new Date().toISOString(),
+  };
+  const i = pending.findIndex((p) => p.code === code || String(p.tg) === tgId);
+  if (i >= 0) pending[i] = entry;
+  else pending.push(entry);
+  await tg("sendMessage", {
+    chat_id: from.id,
+    text:
+      `📝 Request saved: <b>${esc(entry.who || "?")}</b> → <b>${esc(code)}</b>\n` +
+      `The office approves it on the next sync — after that, share your live location.\n` +
+      `────────\n📝 ጥያቄው ተቀምጧል፦ <b>${esc(entry.who || "?")}</b> → <b>${esc(code)}</b>\n` +
+      `ቢሮው በሚቀጥለው ማመሳሰል ያጸድቀዋል፤ ከዚያ ቀጥታ አካባቢዎን ያጋሩ።`,
+    parse_mode: "HTML",
+  });
+  return true;
+}
 
 const readJson = async (file, fallback) => {
   try {
@@ -230,7 +304,25 @@ async function main() {
     if (sm.tg) byTg.set(String(sm.tg), sm);
     if (sm.username) byUser.set(String(sm.username).toLowerCase().replace(/^@/, ""), sm);
   }
+  // exposed to recordJoin so /join can answer "already linked" instantly
+  rosterByTg = byTg;
 
+  // pending self-service claims: applied automatically when AUTO_ASSIGN=1,
+  // otherwise kept as a queue the office reviews with `roster.mjs pending`
+  let pending = [];
+  {
+    const box = await readJson(PENDING_FILE, null);
+    if (box) {
+      try {
+        pending = decryptJson(box, PASS);
+        if (!Array.isArray(pending)) pending = [];
+      } catch {
+        errorCount++;
+        console.error(`[poller] cannot decrypt ${PENDING_FILE} — ignoring pending claims`);
+      }
+    }
+  }
+  let pendingDirty = false;
   const stateFile = path.join(ARCHIVE, "state", "offset.json");
   const state = await readJson(stateFile, { offset: 0 });
 
@@ -299,12 +391,38 @@ async function main() {
           await tg("sendMessage", {
             chat_id: from.id,
             text:
-              `You are not registered yet.\nSend this number to the office: <code>${id}</code>\n` +
-              `────────\nእስካሁን አልተመዘገቡም። ይህን ቁጥር ለቢሮው ይላኩ፡ <code>${id}</code>`,
+              `You are not registered yet.\n` +
+              `${AUTO_ASSIGN ? "Type <code>/join SM-001</code> with the code from the office — it links you automatically." : `Send this number to the office: <code>${id}</code>`}\n` +
+              joinText().split("\n").slice(4).join("\n") +
+              `\n────────\nእስካሁን አልተመዘገቡም።\n` +
+              (AUTO_ASSIGN
+                ? "የቢሮውን ኮድ ይላኩ፦ <code>/join SM-001</code> — በራስ-ሰር ይያያዛሉ።"
+                : `ይህን ቁጥር ለቢሮው ይላኩ፡ <code>${id}</code>`),
             parse_mode: "HTML",
           });
         }
       }
+      skipped++;
+      continue;
+    }
+
+    // ---- /join CODE: self-service telegram-id pairing (no CLI, no AI) ----
+    const joinMatch = /^\/join(?:@\w+)?\s+(\S+)/i.exec(cmd);
+    if (joinMatch) {
+      if (!AUTO_ASSIGN) {
+        await tg("sendMessage", {
+          chat_id: from.id,
+          text: "Self-registration is disabled here — send the office your id: " + String(from.id),
+        });
+      } else if (JOIN_SECRET) {
+        const secret = /^\/join(?:@\w+)?\s+\S+\s+(\S+)/i.exec(cmd)?.[1] || "";
+        if (secret.trim() !== JOIN_SECRET) {
+          await tg("sendMessage", {
+            chat_id: from.id,
+            text: "❌ Wrong join secret · ❌ የተሳሳተ ሚስጥራዊ ቃል",
+          });
+        } else if (await recordJoin(pending, from, joinMatch[1])) pendingDirty = true;
+      } else if (await recordJoin(pending, from, joinMatch[1])) pendingDirty = true;
       skipped++;
       continue;
     }
@@ -440,6 +558,39 @@ async function main() {
     await writeJson(path.join(ARCHIVE, "unmapped.enc.json"), encryptJson(unmapped.slice(-500), PASS));
   }
 
+  // ---- apply self-service /join claims ------------------------------------
+  // AUTO_ASSIGN=1 (default): a pending claim is written straight into the roster
+  // and takes effect immediately — no CLI step, no AI. The roster file lands in
+  // git together with the archive, so the encrypted mapping stays the source of
+  // truth. With AUTO_ASSIGN=0 the queue waits for `roster.mjs pending --apply`.
+  let joined = 0;
+  const stillPending = [];
+  for (const p of pending || []) {
+    if (!p?.code || !p?.tg) continue;
+    if (byTg.has(String(p.tg))) continue; // already linked meanwhile
+    const sm = (roster.salesmen || []).find((s) => s.code === p.code);
+    if (!sm || !AUTO_ASSIGN) {
+      // keep unknown codes in the queue (typo can be fixed by re-sending /join),
+      // drop claims older than 30 days so the file cannot grow forever
+      if (!p.ts || Date.now() - Date.parse(p.ts) < 30 * 86400000) stillPending.push(p);
+      continue;
+    }
+    sm.tg = Number(p.tg);
+    if (p.username && !sm.username) sm.username = p.username;
+    byTg.set(String(sm.tg), sm);
+    dirty.add(sm.code);
+    joined++;
+  }
+  if (joined || stillPending.length !== (pending || []).length) {
+    await writeJson(PENDING_FILE, encryptJson(stillPending, PASS));
+    if (joined) {
+      await writeJson(ROSTER_FILE, encryptJson(roster, PASS));
+      console.log(`[poller] auto-linked ${joined} salesman via /join`);
+    }
+  } else if (pendingDirty) {
+    await writeJson(PENDING_FILE, encryptJson(pending, PASS));
+  }
+
   // ---- encrypted live payload for the public dashboard ----
   const now = Date.now();
   const live = [];
@@ -512,7 +663,7 @@ async function main() {
   console.log(
     `[poller] updates=${updates.length} stored=${stored} skipped=${skipped} ` +
       `cards=${newCustomers.length} replied=${replied} people=${live.length} ` +
-      `errors=${errorCount} dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
+      `joined=${joined} errors=${errorCount} dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
   );
 }
 
