@@ -260,6 +260,7 @@ Releases). The free plan is not the limit — the whole-file rewrite pattern is.
 | Map says "No positions yet" | bot has no location yet | share live location to the bot |
 | Nobody appears | telegram id not in roster | `node scripts/roster.mjs unmapped` then `add` |
 | "Wrong passphrase" | typo, leading/trailing space from copy-paste, Caps Lock, or the secret was changed/rotated | re-enter carefully (spaces are now trimmed automatically); verify with `node scripts/diagnose.mjs` using the same value; if Render and GitHub Actions hold different values, sync them (`gh secret set DASH_PASSPHRASE` + Render env) |
+| "Wrong passphrase" but the phrase IS correct | a network hiccup or a half-written/corrupt `live.enc.json` used to be misreported as a wrong passphrase | fixed: pages now show "Could not reach GitHub — check your connection" for load errors and only show "Wrong passphrase" when decryption itself fails. If you still see it after a hard refresh, run the definitive test below |
 | Pin frozen for hours | GitHub disabled the schedule after 60 days idle | any push re-enables it; bot commits normally keep it alive |
 | Pin frozen although live location is shared | salesman's Telegram id is not in the roster — his pings land in `unmapped`, not on the map | `node scripts/roster.mjs unmapped` then `node scripts/roster.mjs tg SM-001 <id>`; commit + push `private/roster.enc.json`; pin appears within one poll pass |
 | "Wrong passphrase" on every page even though it is correct | files were encrypted with an older passphrase (after rotation) | re-encrypt archive + roster + live payload with the new phrase, or restore the old secret |
@@ -268,3 +269,30 @@ Releases). The free plan is not the limit — the whole-file rewrite pattern is.
 | Render answers 502 after a quiet night | free service was asleep | first request wakes it (~50 s); check the keep-alive monitor |
 | Action fails `Bad credentials` | bot token revoked | BotFather → `/token`, update secret |
 | Telegram stops after 8 h | live-location limit | share again; the app shows a renew warning at 7h48m |
+
+### Definitive passphrase test (30 seconds, no browser involved)
+
+Run this on any machine with Node. It checks whether your passphrase can decrypt the
+exact files the dashboard loads. One of the two lines will tell you precisely what is wrong:
+
+```bash
+DASH_PASSPHRASE='the phrase you type into the dashboard' node --input-type=module -e '
+import fs from "node:fs/promises";
+import { decryptJson } from "./scripts/crypto.mjs";
+const box = JSON.parse(await fs.readFile("private/roster.enc.json", "utf8"));
+try {
+  decryptJson(box, process.env.DASH_PASSPHRASE.trim());
+  console.log("PASSPHRASE OK — matches the files in this repo.");
+} catch {
+  console.log("MISMATCH — this phrase cannot decrypt roster.enc.json.");
+  console.log("(a) it differs from the DASH_PASSPHRASE secret in GitHub Actions, or");
+  console.log("(b) the files were re-encrypted after a rotation. Check Settings → Secrets and Actions,");
+  console.log("    compare with Render environment variables, and re-run scripts/roster.mjs init/add");
+  console.log("    with the surviving phrase if the old one is lost.");
+}
+'
+```
+
+If this prints MISMATCH, the dashboard will never accept the phrase either — the problem
+is the secret/files, not your typing. If it prints OK but the browser still complains,
+hard-refresh (Ctrl+Shift+R): an old service-worker cache may be serving a stale encrypted file.

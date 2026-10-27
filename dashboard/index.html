@@ -149,7 +149,7 @@ const I18N = {
     nudgeBusy:"Please wait {n}s before asking again.",
     nudgeFail:"Could not reach the server — showing the latest saved position.",
     passHint:"The positions are encrypted. Enter the dashboard passphrase to open the map.",
-    open:"Open map", wrongPass:"Wrong passphrase — trim extra spaces and capital letters, then try again. If it still fails, the team changed the passphrase or re-encrypted the data with a new one; ask for the current value.", noData:"No positions yet. Send a live location to the bot.",
+    open:"Open map", wrongPass:"Wrong passphrase — trim extra spaces and capital letters, then try again. If it still fails, the team changed the passphrase or re-encrypted the data with a new one; ask for the current value.", noData:"No positions yet. Send a live location to the bot.", loadFail:"Could not reach GitHub — check your connection. The map will retry automatically; your passphrase was kept.",
     footer:"Accuracy circles are real GPS error, not decoration.",
     generated:"updated", people:"people", m:"m", km:"km"
   },
@@ -163,7 +163,7 @@ const I18N = {
     nudgeBusy:"እባክዎ {n} ሰከንድ ይጠብቁ።",
     nudgeFail:"ሰርቨሩ አልተገኘም — የመጨረሻው አካባቢ ይታያል።",
     passHint:"አካባቢዎቹ ተመስጥረዋል። ካርታውን ለመክፈት የመግቢያ ቃሉን ያስገቡ።",
-    open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ትክክል አይደለም — ቦና ማርክ ሲል እና የቁምፊ ኮርሰር (Caps Lock) ማረጋገጥ ያስፈልጋል። በተደጋጋሚ ከአልሞ ለteam መጠየቅ አለባችሁ።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።",
+    open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ትክክል አይደለም — ቦና ማርክ ሲል እና የቁምፊ ኮርሰር (Caps Lock) ማረጋገጥ ያስፈልጋል። በተደጋጋሚ ከአልሞ ለteam መጠየቅ አለባችሁ።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።", loadFail:"GitHub መድረስ አልተቻለም — መገናኛችሁን ያረጋግጡ። በራስ-ሰር እንደገና ይሞክራል፤ የመግቢያ ቃሉ ተጠብቋል።",
     footer:"የትክክለኛነት ክበቦች እውነተኛ የጂፒኤስ ስህተት ናቸው።",
     generated:"የተዘመነ", people:"ሰዎች", m:"ሜ", km:"ኪ.ሜ"
   }
@@ -325,8 +325,18 @@ async function load() {
     draw();
     render();
   } catch (err) {
-    if (String(err.message).includes("http 404")) {
-      $("status").textContent = t("noData");
+    const msg = String(err && err.message || err);
+    // A failed AES-GCM decrypt throws a DOMException named OperationError — that is the
+    // ONLY reliable "wrong passphrase" signal. Network/CORS/JSON failures must never be
+    // reported as a wrong passphrase (they used to wipe the stored pass and show
+    // "Wrong passphrase" even when the passphrase was perfectly fine).
+    const isDecryptFailure = err && err.name === "OperationError";
+    if (!isDecryptFailure) {
+      if (msg.includes("http 404")) {
+        $("status").textContent = t("noData");
+        return;
+      }
+      toast(t("loadFail"));           // transient network problem — keep the stored passphrase
       return;
     }
     sessionStorage.removeItem("smgps_pass");
