@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * Mock feed for the dashboard — no bot, no network.
+ * Mock feed for one-time crypto testing ONLY. The production system is online-only
+ * (Telegram → GitHub Actions → hosted pages); never run this as part of the live
+ * pipeline and never commit its output over the real live.enc.json.
  * Generates three salesmen walking around Addis, encrypts the payload with
  * the same AES-GCM scheme the real poller uses.
  *

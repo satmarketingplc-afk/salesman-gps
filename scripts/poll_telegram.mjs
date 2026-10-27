@@ -22,11 +22,11 @@ import { encryptJson, decryptJson } from "./crypto.mjs";
 import { buildReports } from "./report.mjs";
 
 const ROOT = process.cwd();
-const ARCHIVE = path.resolve(ROOT, process.env.ARCHIVE_DIR || "archive");
-const ROSTER_FILE = path.resolve(ROOT, process.env.ROSTER_FILE || "private/roster.enc.json");
-const OUT_DIR = path.resolve(ROOT, process.env.OUT_DIR || "dashboard/public");
+let ARCHIVE = path.resolve(ROOT, process.env.ARCHIVE_DIR || "archive");
+let ROSTER_FILE = path.resolve(ROOT, process.env.ROSTER_FILE || "private/roster.enc.json");
+let OUT_DIR = path.resolve(ROOT, process.env.OUT_DIR || "dashboard/public");
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const PASS = process.env.DASH_PASSPHRASE || "";
+const PASS = () => process.env.DASH_PASSPHRASE || "";
 
 const EAT_MS = 3 * 3600 * 1000;
 const ONLINE_MS = Number(process.env.ONLINE_MS || 10 * 60 * 1000);
@@ -46,8 +46,11 @@ const CUSTOMER_URL =
 let errorCount = 0; // corrupt day files etc. — surfaced in the summary line
 let rosterByTg = new Map(); // set by main(): tg id -> salesman, used by /join replies
 
-if (!TOKEN) fail("TELEGRAM_BOT_TOKEN is not set");
-if (PASS.length < 8) fail("DASH_PASSPHRASE must be at least 8 characters");
+// CLI guard: importing this module for tests/diagnostics must never kill the process.
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+  if (!TOKEN) fail("TELEGRAM_BOT_TOKEN is not set");
+  if (PASS().length < 8) fail("DASH_PASSPHRASE must be at least 8 characters");
+}
 
 function fail(msg) {
   console.error(`[poller] ${msg}`);
@@ -55,9 +58,11 @@ function fail(msg) {
 }
 
 async function tg(method, payload) {
+  const token = process.env.TELEGRAM_BOT_TOKEN || TOKEN;
+  const apiBase = process.env.TELEGRAM_API_BASE || API;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(`${API}/bot${TOKEN}/${method}`, {
+      const res = await fetch(`${apiBase}/bot${token}/${method}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
@@ -209,7 +214,7 @@ const loadDay = async (code, day) => {
   const box = await readJson(file, null);
   if (!box) return [];
   try {
-    const pings = decryptJson(box, PASS);
+    const pings = decryptJson(box, PASS());
     return Array.isArray(pings) ? pings : [];
   } catch (err) {
     // Quarantine the corrupt file instead of killing the whole pass: one bad day
@@ -226,7 +231,7 @@ const loadDay = async (code, day) => {
 };
 
 const saveDay = async (code, day, pings) => {
-  await writeJson(dayFile(code, day), encryptJson(pings, PASS));
+  await writeJson(dayFile(code, day), encryptJson(pings, PASS()));
 };
 
 // ---- customer cards -------------------------------------------------------
@@ -286,7 +291,7 @@ async function loadRoster() {
   const box = await readJson(ROSTER_FILE, null);
   if (box) {
     try {
-      return decryptJson(box, PASS);
+      return decryptJson(box, PASS());
     } catch {
       fail("cannot decrypt roster — DASH_PASSPHRASE does not match the one used to create it");
     }
@@ -294,6 +299,19 @@ async function loadRoster() {
   const template = await readJson(path.join(ROOT, "data", "salesmen.json"), { salesmen: [] });
   console.warn("[poller] no encrypted roster yet — using the public template (no real telegram ids)");
   return template;
+}
+
+// Exported for tests and the self-diagnosis script (scripts/diagnose.mjs) so the
+// whole pipeline can be exercised with a mocked Telegram API — no real bot needed.
+export { encryptJson, decryptJson };
+export async function runOnce(overrides = {}) {
+  if (overrides.rosterFile) ROSTER_FILE = overrides.rosterFile;
+  if (overrides.archiveDir) ARCHIVE = path.resolve(ROOT, overrides.archiveDir);
+  if (overrides.outDir) OUT_DIR = path.resolve(ROOT, overrides.outDir);
+  if (overrides.token !== undefined) process.env.TELEGRAM_BOT_TOKEN = overrides.token;
+  if (overrides.passphrase) process.env.DASH_PASSPHRASE = overrides.passphrase;
+  if (overrides.apiBase) process.env.TELEGRAM_API_BASE = overrides.apiBase;
+  await main();
 }
 
 async function main() {
@@ -314,7 +332,7 @@ async function main() {
     const box = await readJson(PENDING_FILE, null);
     if (box) {
       try {
-        pending = decryptJson(box, PASS);
+        pending = decryptJson(box, PASS());
         if (!Array.isArray(pending)) pending = [];
       } catch {
         errorCount++;
@@ -340,7 +358,7 @@ async function main() {
   const updates = [];
   let cursor = state.offset;
   for (let batch = 0; batch < 5; batch++) {
-    const url = new URL(`${process.env.TELEGRAM_API_BASE || "https://api.telegram.org"}/bot${TOKEN}/getUpdates`);
+    const url = new URL(`${process.env.TELEGRAM_API_BASE || "https://api.telegram.org"}/bot${process.env.TELEGRAM_BOT_TOKEN || TOKEN}/getUpdates`);
     url.searchParams.set("timeout", "0");
     url.searchParams.set("allowed_updates", JSON.stringify(["message", "edited_message"]));
     if (cursor) url.searchParams.set("offset", String(cursor));
@@ -367,7 +385,15 @@ async function main() {
   let stored = 0;
   let skipped = 0;
   const dirty = new Set();
-  const unmapped = (await readJson(path.join(ARCHIVE, "unmapped.enc.json"), null)) || [];
+  // quarantined corrupt entries are kept so a bad file never crashes the pass
+  const unmappedRaw = (await readJson(path.join(ARCHIVE, "unmapped.enc.json"), null)) || [];
+  const unmapped = Array.isArray(unmappedRaw) ? unmappedRaw : [];
+  if (!Array.isArray(unmappedRaw) && Object.keys(unmappedRaw).length) {
+    for (const [k, v] of Object.entries(unmappedRaw)) {
+      if (Array.isArray(v)) unmapped.push(...v.map((x) => ({ ...x, _from: k })));
+      else if (v && typeof v === "object") unmapped.push({ ...v, _from: k });
+    }
+  }
 
   const custMonths = new Map(); // month -> decrypted entries, loaded lazily
   const newCustomers = [];
@@ -454,7 +480,7 @@ async function main() {
         let list = [];
         if (box) {
           try {
-            list = decryptJson(box, PASS);
+            list = decryptJson(box, PASS());
           } catch {
             fail(`cannot decrypt ${file} — wrong DASH_PASSPHRASE?`);
           }
@@ -534,7 +560,7 @@ async function main() {
   // persist the month files once per pass, then refresh the rolling view the page reads
   for (const [month, list] of custMonths) {
     list.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
-    await writeJson(custFile(month), encryptJson(list, PASS));
+    await writeJson(custFile(month), encryptJson(list, PASS()));
   }
 
   if (newCustomers.length) {
@@ -543,7 +569,7 @@ async function main() {
     let view = { generated: null, entries: [] };
     if (box) {
       try {
-        view = decryptJson(box, PASS);
+        view = decryptJson(box, PASS());
       } catch {
         // unreadable payload: the month files stay the source of truth, rebuild from this batch
       }
@@ -559,11 +585,11 @@ async function main() {
         .map((s) => ({ code: s.code, name: s.name, nameAm: s.nameAm || s.name, color: s.color || "" })),
       entries: [...fresh, ...(view.entries || [])].slice(0, 1000),
     };
-    await writeJson(file, encryptJson(view, PASS));
+    await writeJson(file, encryptJson(view, PASS()));
   }
 
   if (unmapped.length) {
-    await writeJson(path.join(ARCHIVE, "unmapped.enc.json"), encryptJson(unmapped.slice(-500), PASS));
+    await writeJson(path.join(ARCHIVE, "unmapped.enc.json"), encryptJson(unmapped.slice(-500), PASS()));
   }
 
   // ---- apply self-service /join claims ------------------------------------
@@ -573,6 +599,7 @@ async function main() {
   // truth. With AUTO_ASSIGN=0 the queue waits for `roster.mjs pending --apply`.
   let joined = 0;
   const stillPending = [];
+  const appliedClaims = [];
   for (const p of pending || []) {
     if (!p?.code || !p?.tg) continue;
     if (byTg.has(String(p.tg))) continue; // already linked meanwhile
@@ -588,25 +615,86 @@ async function main() {
     byTg.set(String(sm.tg), sm);
     dirty.add(sm.code);
     joined++;
+    appliedClaims.push(p);
+  }
+
+  // ---- recover locations sent BEFORE the link ------------------------------
+  // The classic "I added them but they are not on the map" case: a salesman shared
+  // live location while still unmapped, so every point went to unmapped.enc.json.
+  // After /join links them, those points used to stay invisible until the NEXT share.
+  // Now we move matching unmapped points into their day files immediately, so the
+  // pin and trail appear on this very pass — zero manual steps.
+  if (appliedClaims.length && unmapped.length) {
+    const recoveredByCode = new Map(); // code -> [ping,...]
+    const keptUnmapped = [];
+    for (const rec of unmapped) {
+      const claim = appliedClaims.find((p) => String(p.tg) === String(rec.tg));
+      if (!claim) {
+        keptUnmapped.push(rec);
+        continue;
+      }
+      const ping = {
+        ts: rec.ts, lat: rec.lat, lng: rec.lng,
+        acc: rec.acc ?? null, hdg: rec.hdg ?? null,
+        live: !!rec.live, src: "telegram",
+      };
+      if (!Number.isFinite(ping.lat) || !Number.isFinite(ping.lng) || !ping.ts) {
+        keptUnmapped.push(rec); // malformed record: leave it for the office to inspect
+        continue;
+      }
+      const list = recoveredByCode.get(claim.code) || [];
+      list.push(ping);
+      recoveredByCode.set(claim.code, list);
+    }
+    if (recoveredByCode.size) {
+      for (const [code, pts] of recoveredByCode) {
+        pts.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+        const days = new Set(pts.map((p) => dayKey(p.ts)));
+        for (const day of days) {
+          const existing = await loadDay(code, day);
+          const have = new Set(existing.map((p) => p.ts));
+          const add = pts.filter((p) => dayKey(p.ts) === day && !have.has(p.ts));
+          if (!add.length) continue;
+          await saveDay(code, day, [...existing, ...add]);
+        }
+        dirty.add(code);
+        stored += pts.length;
+      }
+      unmapped.length = 0;
+      unmapped.push(...keptUnmapped);
+      console.log(`[poller] recovered ${[...recoveredByCode.values()].flat().length} pre-link location(s) for ${recoveredByCode.size} newly linked salesman — visible on the map now`);
+    }
   }
   if (joined || stillPending.length !== (pending || []).length) {
-    await writeJson(PENDING_FILE, encryptJson(stillPending, PASS));
+    await writeJson(PENDING_FILE, encryptJson(stillPending, PASS()));
     if (joined) {
-      await writeJson(ROSTER_FILE, encryptJson(roster, PASS));
+      await writeJson(ROSTER_FILE, encryptJson(roster, PASS()));
       console.log(`[poller] auto-linked ${joined} salesman via /join`);
     }
   } else if (pendingDirty) {
-    await writeJson(PENDING_FILE, encryptJson(pending, PASS));
+    await writeJson(PENDING_FILE, encryptJson(pending, PASS()));
   }
 
   // ---- encrypted live payload for the public dashboard ----
   const now = Date.now();
   const live = [];
+  let noTg = 0, noPoints = 0;
+  // dayKey(now) is UTC-based: in EAT (UTC+3) early morning hours roll over to the
+  // previous UTC day, so also check that file — otherwise a salesman who joined at
+  // 08:00 EAT would not appear on the map until 03:00 UTC.
+  const todayKeys = [dayKey(new Date(now).toISOString())];
+  const yest = new Date(now - 86400000);
+  if (!todayKeys.includes(dayKey(yest.toISOString()))) todayKeys.push(dayKey(yest.toISOString()));
   for (const sm of roster.salesmen || []) {
     if (sm.active === false) continue;
-    const day = dayKey(new Date(now).toISOString());
-    const pings = await loadDay(sm.code, day);
-    if (!pings.length) continue;
+    if (!sm.tg) { noTg++; console.warn(`[poller] ${sm.code} (${sm.name}) has NO telegram id linked — send /join ${sm.code} to the bot`); continue; }
+    let pings = [];
+    for (const day of todayKeys) {
+      const part = await loadDay(sm.code, day);
+      if (part.length) { pings = [...pings, ...part]; }
+    }
+    pings.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    if (!pings.length) { noPoints++; console.warn(`[poller] ${sm.code} (${sm.name}) has no location points today — not on the map until they Share live location`); continue; }
     // whole day, so the line on the map matches the distance the card reports;
     // decimated to ~400 points: enough for the shape, small enough to commit every 2 min
     const raw = pings.slice(-TRAIL_POINTS);
@@ -639,7 +727,7 @@ async function main() {
   }
 
   await fs.mkdir(OUT_DIR, { recursive: true });
-  await writeJson(path.join(OUT_DIR, "live.enc.json"), encryptJson({ generated: new Date().toISOString(), salesmen: live }, PASS));
+  await writeJson(path.join(OUT_DIR, "live.enc.json"), encryptJson({ generated: new Date().toISOString(), salesmen: live }, PASS()));
 
   // Daily activity rollup for the Reports page. Only built on the passes that commit the
   // archive (once an hour), so the extra PBKDF2 work is rare.
@@ -648,11 +736,11 @@ async function main() {
     const reports = await buildReports({
       archiveDir: ARCHIVE,
       roster,
-      passphrase: PASS,
+      passphrase: PASS(),
       days: Number(process.env.REPORT_DAYS || 7),
       now,
     });
-    await writeJson(path.join(OUT_DIR, "reports.enc.json"), encryptJson(reports, PASS));
+    await writeJson(path.join(OUT_DIR, "reports.enc.json"), encryptJson(reports, PASS()));
     builtReports = true;
   }
 
@@ -673,6 +761,12 @@ async function main() {
       `cards=${newCustomers.length} replied=${replied} people=${live.length} ` +
       `joined=${joined} errors=${errorCount} dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
   );
+  if (noTg || noPoints) {
+    console.log(`[poller] not on map: ${noTg} salesman without telegram id (/join CODE), ${noPoints} linked but no location today`);
+  }
 }
 
-main().catch((err) => fail(err.stack || String(err)));
+// run only when executed as a CLI (scripts/poll_telegram.mjs), not when imported
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+  main().catch((err) => fail(err.stack || String(err)));
+}

@@ -177,10 +177,22 @@ async function decrypt(payload, passphrase) {
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
-const LOCAL = location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
-const DATA_URL = LOCAL
-  ? "../dashboard/public/reports.enc.json"
-  : "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/reports.enc.json";
+// Online-only: always read from the hosted repo (GitHub raw). No local/file fallbacks.
+// Owner/repo derived from the page URL so forks/renames need no code edit.
+(function () {
+  const host = location.hostname;
+  let owner = "satmarketingplc-afk", repo = "salesman-gps";
+  const ghPages = host.match(/^(?:www\.)?([^./]+)\.github\.(io|dev)$/);
+  if (ghPages) {
+    owner = ghPages[1];
+    const seg = location.pathname.split("/").filter(Boolean);
+    if (seg.length && !["dashboard", "customers", "reports", "app"].includes(seg[0])) repo = seg[0];
+  }
+  const q = new URLSearchParams(location.search);
+  window.GH_OWNER = q.get("owner") || owner;
+  window.GH_REPO_NAME = q.get("repo") || repo;
+})();
+const DATA_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO_NAME}/main/dashboard/public/reports.enc.json`;
 
 const hhmm = (iso) =>
   new Date(iso).toLocaleTimeString("en-GB", { timeZone: "Africa/Addis_Ababa", hour: "2-digit", minute: "2-digit" });

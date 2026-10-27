@@ -240,10 +240,25 @@ async function decrypt(payload, passphrase) {
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
-const LOCAL = location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
-const LIVE_URL = LOCAL
-  ? "public/live.enc.json"
-  : "https://raw.githubusercontent.com/satmarketingplc-afk/salesman-gps/main/dashboard/public/live.enc.json";
+// Online-only: always read the live payload from the hosted repo (GitHub raw).
+// Works identically on GitHub Pages and Render — no local/file fallbacks.
+// Owner/repo are derived automatically from the page URL, so forks and renames
+// work with zero edits. Override with ?owner=X&repo=Y&tld=github.io if needed.
+(function () {
+  const host = location.hostname;
+  let owner = "satmarketingplc-afk", repo = "salesman-gps";
+  const ghPages = host.match(/^(?:www\.)?([^./]+)\.github\.io$/);
+  const custom = host.match(/^(?:www\.)?([^./]+)\.github\.dev$/);
+  if (ghPages || custom) {
+    owner = ghPages ? ghPages[1] : custom[1];
+    const seg = location.pathname.split("/").filter(Boolean);
+    if (seg.length && seg[0] !== "dashboard" && seg[0] !== "customers" && seg[0] !== "reports") repo = seg[0];
+  }
+  const q = new URLSearchParams(location.search);
+  window.GH_OWNER = q.get("owner") || owner;
+  window.GH_REPO_NAME = q.get("repo") || repo;
+})();
+const LIVE_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO_NAME}/main/dashboard/public/live.enc.json`;
 
 // The hosting server (Render) answers /healthz and can ask the team for a fresh point.
 // On GitHub Pages these paths 404, so the button silently falls back to a plain reload.
