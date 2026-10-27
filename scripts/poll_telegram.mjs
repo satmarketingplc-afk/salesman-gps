@@ -347,6 +347,14 @@ async function main() {
 
     const res = await fetch(url, { signal: AbortSignal.timeout(25000) });
     const body = await res.json().catch(() => ({}));
+    // A webhook was set once (or a second poller is running): getUpdates answers 409 and
+    // will do so forever — every pass would die before storing anything. Delete the hook
+    // and retry this batch instead of failing the whole run.
+    if (!body.ok && /conflicted|terminated by new webhook/i.test(body.description || "")) {
+      console.warn("[poller] telegram conflict — deleting webhook and retrying");
+      await tg("deleteWebhook", { drop_pending_updates: false });
+      continue;
+    }
     if (!body.ok) fail(`telegram: ${body.description || res.status}`);
 
     const chunk = body.result || [];
