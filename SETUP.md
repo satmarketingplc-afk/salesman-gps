@@ -15,6 +15,7 @@ One repo. One bot. Two secrets. About 10 minutes — and I already did the repo 
 | Launcher | `https://satmarketingplc-afk.github.io/salesman-gps/` |
 | Manager map | `.../dashboard/` |
 | Salesman app | `.../app/` |
+| Render (optional) | same three paths on your `*.onrender.com` URL |
 | Registered | `SM-001 SAT` · tg `8973058282` · red |
 
 > The dashboard passphrase is **not** stored in this repository (it is public). It lives only in
@@ -71,7 +72,25 @@ The mock only writes `dashboard/public/live.enc.json`; do not commit it over the
 
 ---
 
-## 5. Daily routine
+## 5. Hosting on Render (alongside Pages)
+
+The page is pure static files, and it reads positions from `raw.githubusercontent.com`, so
+GitHub Pages and Render can both serve it — neither one holds the data.
+
+1. Render → **New → Blueprint** → pick `satmarketingplc-afk/salesman-gps`. `render.yaml`
+   already defines the build (`_site` with `index.html`, `app/`, `dashboard/`).
+2. Or **New → Static Site** manually:
+   - Build command: `rm -rf _site && mkdir -p _site && cp index.html _site/ && cp -r app dashboard _site/`
+   - Publish directory: `_site`
+3. Open `https://<your-service>.onrender.com/` — same three doors:
+   - `/` launcher · `/dashboard/` manager map · `/app/` salesman app
+
+Optional: keep only Render and turn Pages off (Repo → Settings → Pages → Source: None).
+The Action keeps writing to GitHub either way.
+
+---
+
+## 6. Daily routine
 
 - Salesman taps **Share live location → 8 hours** at the start of the shift (the app reminds him).
 - Manager opens the dashboard, types the passphrase once per browser session.
