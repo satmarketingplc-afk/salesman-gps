@@ -259,7 +259,7 @@ Releases). The free plan is not the limit — the whole-file rewrite pattern is.
 |---|---|---|
 | Map says "No positions yet" | bot has no location yet | share live location to the bot |
 | Nobody appears | telegram id not in roster | `node scripts/roster.mjs unmapped` then `add` |
-| "Wrong passphrase" | typo, or secret changed | re-enter; if secret changed, wait for next run |
+| "Wrong passphrase" | typo, leading/trailing space from copy-paste, Caps Lock, or the secret was changed/rotated | re-enter carefully (spaces are now trimmed automatically); verify with `node scripts/diagnose.mjs` using the same value; if Render and GitHub Actions hold different values, sync them (`gh secret set DASH_PASSPHRASE` + Render env) |
 | Pin frozen for hours | GitHub disabled the schedule after 60 days idle | any push re-enables it; bot commits normally keep it alive |
 | Pin frozen although live location is shared | salesman's Telegram id is not in the roster — his pings land in `unmapped`, not on the map | `node scripts/roster.mjs unmapped` then `node scripts/roster.mjs tg SM-001 <id>`; commit + push `private/roster.enc.json`; pin appears within one poll pass |
 | "Wrong passphrase" on every page even though it is correct | files were encrypted with an older passphrase (after rotation) | re-encrypt archive + roster + live payload with the new phrase, or restore the old secret |

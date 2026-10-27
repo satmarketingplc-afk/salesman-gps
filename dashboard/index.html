@@ -149,7 +149,7 @@ const I18N = {
     nudgeBusy:"Please wait {n}s before asking again.",
     nudgeFail:"Could not reach the server — showing the latest saved position.",
     passHint:"The positions are encrypted. Enter the dashboard passphrase to open the map.",
-    open:"Open map", wrongPass:"Wrong passphrase.", noData:"No positions yet. Send a live location to the bot.",
+    open:"Open map", wrongPass:"Wrong passphrase — trim extra spaces and capital letters, then try again. If it still fails, the team changed the passphrase or re-encrypted the data with a new one; ask for the current value.", noData:"No positions yet. Send a live location to the bot.",
     footer:"Accuracy circles are real GPS error, not decoration.",
     generated:"updated", people:"people", m:"m", km:"km"
   },
@@ -163,7 +163,7 @@ const I18N = {
     nudgeBusy:"እባክዎ {n} ሰከንድ ይጠብቁ።",
     nudgeFail:"ሰርቨሩ አልተገኘም — የመጨረሻው አካባቢ ይታያል።",
     passHint:"አካባቢዎቹ ተመስጥረዋል። ካርታውን ለመክፈት የመግቢያ ቃሉን ያስገቡ።",
-    open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ስህተት ነው።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።",
+    open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ትክክል አይደለም — ቦና ማርክ ሲል እና የቁምፊ ኮርሰር (Caps Lock) ማረጋገጥ ያስፈልጋል። በተደጋጋሚ ከአልሞ ለteam መጠየቅ አለባችሁ።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።",
     footer:"የትክክለኛነት ክበቦች እውነተኛ የጂፒኤስ ስህተት ናቸው።",
     generated:"የተዘመነ", people:"ሰዎች", m:"ሜ", km:"ኪ.ሜ"
   }
@@ -467,9 +467,12 @@ $("refresh").onclick = async () => {
 
 $("gateForm").onsubmit = async (e) => {
   e.preventDefault();
-  const pass = $("pass").value;
+  // Trim surrounding whitespace — copy/paste of the passphrase often carries a stray
+  // space or newline, which AES-GCM then rejects as "Wrong passphrase".
+  const pass = $("pass").value.trim();
   if (!pass) return;
   sessionStorage.setItem("smgps_pass", pass);
+  $("pass").value = "";
   $("gateErr").style.display = "none";
   await load();
 };
