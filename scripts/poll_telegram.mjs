@@ -43,6 +43,7 @@ const CUSTOMER_URL =
 
 let errorCount = 0; // corrupt day files etc. — surfaced in the summary line
 let rosterByTg = new Map(); // set by main(): tg id -> salesman, used by /join replies
+let joinsThisPass = []; // /join claims recorded during the current pass (reset in main)
 
 // CLI guard: importing this module for tests/diagnostics must never kill the process.
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
@@ -117,7 +118,9 @@ const welcomeKeyboard = {
 // Instead /join CODE records a pending claim in private/pending.enc.json; the
 // office approves it by committing (or applying) that file — no manual typing
 // of numeric ids, and the passphrase never leaves the server/workflow.
-const PENDING_FILE = path.join(path.dirname(ROSTER_FILE), "pending.enc.json");
+// The pending queue lives next to the roster. ROSTER_FILE is mutable (runOnce() can
+// redirect it for tests/diagnostics), so resolve the path lazily on every use.
+const pendingFile = () => path.join(path.dirname(ROSTER_FILE), "pending.enc.json");
 const joinText = () =>
   [
     "🔗 <b>Link your account · ታገናኙ</b>",
@@ -128,7 +131,7 @@ const joinText = () =>
     "ስምዎን ለሥራ አስኪያጁ ይላኩ፣ ከዚያ ይጻፉ፦ <code>/join SM-001</code>",
   ].join("\n");
 
-async function recordJoin(pending, from, codeRaw) {
+async function recordJoin(pending, from, codeRaw, bootstrap = false) {
   const code = String(codeRaw || "").trim().toUpperCase().replace(/^#/, "");
   const tgId = String(from.id);
   if (!/^[A-Z0-9][A-Z0-9_-]{0,15}$/.test(code)) {
@@ -139,20 +142,33 @@ async function recordJoin(pending, from, codeRaw) {
     });
     return false;
   }
-  if (rosterByTg.has(tgId)) {
-    const mine = rosterByTg.get(tgId);
+  // "Already linked" must consider claims that were recorded EARLIER in THIS pass:
+  // the roster map is only rebuilt on the next run, so without this check a second
+  // /join would either overwrite the first person's claim (same code) or silently
+  // steal their telegram id match (different code) — the classic "only one salesman
+  // ever gets registered" bug when several people join in the same sync window.
+  const linkedOrClaimed =
+    rosterByTg.get(tgId) ||
+    pending.find((p) => String(p.tg) === tgId) ||
+    joinsThisPass.find((p) => String(p.tg) === tgId);
+  if (linkedOrClaimed) {
     await tg("sendMessage", {
       chat_id: from.id,
-      text: `✅ Already linked as <b>${esc(mine?.code || "")} ${esc(mine?.name || "")}</b>. Just share your live location.\n✅ ተያይዘዋል። ቀጥታ አካባቢዎን ያጋሩ።`,
+      text: `✅ Already linked as <b>${esc(linkedOrClaimed?.code || "")} ${esc(linkedOrClaimed?.name || "")}</b>. Just share your live location.\n✅ ተያይዘዋል። ቀጥታ አካባቢዎን ያጋሩ።`,
       parse_mode: "HTML",
     });
     return false;
   }
-  const dup = pending.find((p) => p.code === code && String(p.tg) !== tgId);
+  // Several people may legitimately queue for the same code until one claim wins
+  // (bootstrap mode especially — the roster is still the public template there).
+  // Keep ONE claim per code (first come, first served) so a mis-owned code does not
+  // lock out the whole team during setup. Later senders of a taken code get an error.
+  const dup = pending.find((p) => p.code === code && String(p.tg) !== tgId) ||
+              joinsThisPass.find((p) => p.code === code && String(p.tg) !== tgId);
   if (dup) {
     await tg("sendMessage", {
       chat_id: from.id,
-      text: `⚠️ Code <b>${esc(code)}</b> is already claimed by someone else. Ask the office for your own code.\n⚠️ ይህ ኮድ ለላ ሰው ተይዟል። ለቢሮው ይጠይቁ።`,
+      text: `⚠️ Code <b>${esc(code)}</b> is already claimed by someone else. Ask the office for your own code.\n⚠️ ይህ ኮድ ለሌላ ሰው ተይዟል። ለቢሮው ይጠይቁ።`,
       parse_mode: "HTML",
     });
     return false;
@@ -164,9 +180,14 @@ async function recordJoin(pending, from, codeRaw) {
     username: from.username || null,
     ts: new Date().toISOString(),
   };
+  // One slot per code AND one slot per person: replacing by (code OR tg) used to let
+  // a second joiner overwrite the first joiner's row, leaving exactly one registration.
   const i = pending.findIndex((p) => p.code === code || String(p.tg) === tgId);
   if (i >= 0) pending[i] = entry;
   else pending.push(entry);
+  const j = joinsThisPass.findIndex((p) => p.code === code || String(p.tg) === tgId);
+  if (j >= 0) joinsThisPass[j] = entry;
+  else joinsThisPass.push(entry); // applied this pass when AUTO_ASSIGN/bootstrap allows
   await tg("sendMessage", {
     chat_id: from.id,
     text:
@@ -293,7 +314,23 @@ function normalizeCustomer(c, msg, sm, from) {
   };
 }
 
+// Bootstrap state: the encrypted roster file does not exist yet and the public
+// data/salesmen.json is still the placeholder template (tg=0 for everyone). The
+// poller then runs in "bootstrap mode" for this pass: a self-service /join CODE
+// arriving during the pass links that salesman against the template and writes
+// private/roster.enc.json — salesmen can fix an unregistered system from Telegram
+// alone, with zero CLI access. If NOTHING gets linked by the end of the pass, the
+// actionable error below fires instead of publishing a silently empty map.
+let bootstrapMode = false;
+
+const NO_LINKS_MSG =
+  "roster has no Telegram links: private/roster.enc.json is missing and data/salesmen.json " +
+  "is the placeholder template (tg=0 for everyone). Create the real roster with " +
+  '`node scripts/roster.mjs add SM-001 "Name" "ስም" <telegram id> "#color"` or let ' +
+  "salesmen self-link with /join CODE in the bot, then commit private/roster.enc.json.";
+
 async function loadRoster() {
+  bootstrapMode = false;
   const box = await readJson(ROSTER_FILE, null);
   if (box) {
     try {
@@ -304,20 +341,17 @@ async function loadRoster() {
   }
   // The public template is only a code list. A roster whose entries all have tg=0
   // means NOBODY can be linked — every ping falls into the unmapped pile and the
-  // dashboard shows zero salesmen ("new device does not work at all"). Treat that
-  // state as an error so the office gets an actionable message instead of an
-  // silently empty map.
+  // dashboard shows zero salesmen ("new device does not work at all"). Enter
+  // bootstrap mode instead of failing outright: /join may arrive later in THIS pass
+  // and link everything automatically. main() re-checks before publishing live data.
   const template = await readJson(path.join(ROOT, "data", "salesmen.json"), { salesmen: [] });
   const linked = (template.salesmen || []).filter((s) => s.active !== false && Number(s.tg));
   if (!linked.length) {
-    fail(
-      "roster has no Telegram links: private/roster.enc.json is missing and data/salesmen.json " +
-        "is the placeholder template (tg=0 for everyone). Create the real roster with " +
-        "`node scripts/roster.mjs add SM-001 \"Name\" \"ስም\" <telegram id> \"#color\"` or let " +
-        "salesmen self-link with /join CODE in the bot, then commit private/roster.enc.json."
-    );
+    bootstrapMode = true;
+    console.warn("[poller] no encrypted roster yet — bootstrap mode: a /join CODE on the bot will create the first link this pass");
+  } else {
+    console.warn("[poller] no encrypted roster yet — using the public template (some ids already linked)");
   }
-  console.warn("[poller] no encrypted roster yet — using the public template (no real telegram ids)");
   return template;
 }
 
@@ -352,6 +386,7 @@ const dayCache = new Map(); // "code|day" -> Array<ping>
 async function main() {
   dayCacheEnabled = true;
   dayCache.clear();
+  joinsThisPass = [];
   const roster = await loadRoster();
   const byTg = new Map();
   const byUser = new Map();
@@ -366,14 +401,14 @@ async function main() {
   // otherwise kept as a queue the office reviews with `roster.mjs pending`
   let pending = [];
   {
-    const box = await readJson(PENDING_FILE, null);
+    const box = await readJson(pendingFile(), null);
     if (box) {
       try {
         pending = decryptJson(box, PASS());
         if (!Array.isArray(pending)) pending = [];
       } catch {
         errorCount++;
-        console.error(`[poller] cannot decrypt ${PENDING_FILE} — ignoring pending claims`);
+        console.error(`[poller] cannot decrypt ${pendingFile()} — ignoring pending claims`);
       }
     }
   }
@@ -492,8 +527,8 @@ async function main() {
             chat_id: from.id,
             text: "❌ Wrong join secret · ❌ የተሳሳተ ሚስጥራዊ ቃል",
           });
-        } else if (await recordJoin(pending, from, joinMatch[1])) pendingDirty = true;
-      } else if (await recordJoin(pending, from, joinMatch[1])) pendingDirty = true;
+        } else if (await recordJoin(pending, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
+      } else if (await recordJoin(pending, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
       skipped++;
       continue;
     }
@@ -658,11 +693,42 @@ async function main() {
   const appliedClaims = [];
   // O(1) code lookup instead of scanning the roster once per pending claim
   const byCode = new Map((roster.salesmen || []).map((s) => [s.code, s]));
-  for (const p of pending || []) {
+  // In bootstrap mode the roster came from the public template, so even with
+  // AUTO_ASSIGN=0 a waiting /join claim is the office's own registration signal —
+  // apply it now and persist the roster file. This is what makes "nobody visible
+  // on a fresh install" self-heal: send /join SM-001, wait one pass, done.
+  const bootstrapping = bootstrapMode;
+  const claims = [...(pending || [])];
+  for (const j of joinsThisPass) {
+    if (!claims.some((p) => p.code === j.code && String(p.tg) === String(j.tg))) claims.push(j);
+  }
+  const claimedCodes = new Set();
+  // Claims that were rejected because their code belongs to somebody else must NOT
+  // sit in the queue forever: they would re-trigger the rejection message on every
+  // pass (spam) and keep the pending file dirty. Drop them after 3 days instead.
+  const staleRejection = (p) => p.ts && Date.now() - Date.parse(p.ts) > 3 * 86400000;
+  for (const p of claims) {
     if (!p?.code || !p?.tg) continue;
     if (byTg.has(String(p.tg))) continue; // already linked meanwhile
+    if (claimedCodes.has(p.code)) continue; // one link per code per pass (FIFO wins)
     const sm = byCode.get(p.code);
-    if (!sm || !AUTO_ASSIGN) {
+    // Never steal a code that is ALREADY linked to a different telegram id — without
+    // this guard, a stray /join SM-001 from a new device would silently re-point an
+    // existing salesman's pin to the newcomer, and the office would only ever see
+    // ONE person on the map no matter how many joined.
+    if (sm && Number(sm.tg) && String(sm.tg) !== String(p.tg)) {
+      console.warn(`[poller] /join ${p.code} rejected: code already linked to tg=${sm.tg}, not ${p.tg}`);
+      if (!staleRejection(p)) {
+        await tg("sendMessage", {
+          chat_id: Number(p.tg),
+          text: `⚠️ <b>${esc(p.code)}</b> is already registered to another phone. Ask the office for your own code.\n⚠️ <b>${esc(p.code)}</b> ለሌላ ስልክ ተመዝጧል። ለቢሮው ይጠይቁ።`,
+          parse_mode: "HTML",
+        });
+        stillPending.push(p);
+      }
+      continue;
+    }
+    if (!sm || (!AUTO_ASSIGN && !bootstrapping)) {
       // keep unknown codes in the queue (typo can be fixed by re-sending /join),
       // drop claims older than 30 days so the file cannot grow forever
       if (!p.ts || Date.now() - Date.parse(p.ts) < 30 * 86400000) stillPending.push(p);
@@ -671,6 +737,7 @@ async function main() {
     sm.tg = Number(p.tg);
     if (p.username && !sm.username) sm.username = p.username;
     byTg.set(String(sm.tg), sm);
+    claimedCodes.add(p.code);
     dirty.add(sm.code);
     joined++;
     appliedClaims.push(p);
@@ -754,14 +821,22 @@ async function main() {
       console.log(`[poller] recovered ${[...recoveredByCode.values()].flat().length} pre-link location(s) for ${recoveredByCode.size} newly linked salesman — visible on the map now`);
     }
   }
-  if (joined || stillPending.length !== (pending || []).length) {
-    await writeJson(PENDING_FILE, encryptJson(stillPending, PASS()));
+  const loadedCount = (pending || []).length;
+  const newThisPass = joinsThisPass.filter((j) => !pending.some((p) => p.code === j.code && String(p.tg) === String(j.tg))).length;
+  if (joined || stillPending.length !== loadedCount + newThisPass) {
+    await writeJson(pendingFile(), encryptJson(stillPending, PASS()));
     if (joined) {
-      await writeJson(ROSTER_FILE, encryptJson(roster, PASS()));
+      await writeJson(ROSTER_FILE, encryptJson(roster, PASS())); // also ends bootstrap mode next pass
       console.log(`[poller] auto-linked ${joined} salesman via /join`);
     }
   } else if (pendingDirty) {
-    await writeJson(PENDING_FILE, encryptJson(pending, PASS()));
+    // claims recorded this pass that were not applied (AUTO_ASSIGN=0 queue mode):
+    // persist them so the office can review with `roster.mjs pending`
+    const merged = [...(pending || [])];
+    for (const j of joinsThisPass) {
+      if (!merged.some((p) => p.code === j.code && String(p.tg) === String(j.tg))) merged.push(j);
+    }
+    await writeJson(pendingFile(), encryptJson(merged, PASS()));
   }
 
   // ---- encrypted live payload for the public dashboard ----
@@ -836,6 +911,14 @@ async function main() {
       trail: trail.map((p) => [p.lat, p.lng]),
     });
   }
+
+  // Bootstrap guard: if we started with no roster file and STILL nobody is linked
+  // (no /join arrived), stop with the actionable error instead of committing an
+  // empty map that looks like "the system lost everyone".
+  if (bootstrapMode && !roster.salesmen.some((s) => s.active !== false && Number(s.tg))) {
+    fail(NO_LINKS_MSG);
+  }
+  bootstrapMode = false;
 
   await fs.mkdir(OUT_DIR, { recursive: true });
   await writeJson(path.join(OUT_DIR, "live.enc.json"), encryptJson({ generated: new Date().toISOString(), salesmen: live }, PASS()));

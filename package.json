@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node server/index.mjs",
     "poll": "node scripts/poll_telegram.mjs",
-    "mock": "node scripts/mock_live.mjs"
+    "mock": "node scripts/mock_live.mjs",
+    "test": "node test/join-multi.test.mjs"
   }
 }
