@@ -133,7 +133,7 @@ const joinText = () =>
     "ስምዎን ለሥራ አስኪያጁ ይላኩ፣ ከዚያ ይጻፉ፦ <code>/join SM-001</code>",
   ].join("\n");
 
-async function recordJoin(pending, joinsThisPass, from, codeRaw, bootstrap = false) {
+async function recordJoin(pending, joinsThisPass, rosterByCode, from, codeRaw, bootstrap = false) {
   const code = String(codeRaw || "").trim().toUpperCase().replace(/^#/, "");
   const tgId = String(from.id);
   if (!/^[A-Z0-9][A-Z0-9_-]{0,15}$/.test(code)) {
@@ -165,8 +165,19 @@ async function recordJoin(pending, joinsThisPass, from, codeRaw, bootstrap = fal
   // (bootstrap mode especially — the roster is still the public template there).
   // Keep ONE claim per code (first come, first served) so a mis-owned code does not
   // lock out the whole team during setup. Later senders of a taken code get an error.
-  const dup = pending.find((p) => p.code === code && String(p.tg) !== tgId) ||
-              joinsThisPass.find((p) => p.code === code && String(p.tg) !== tgId);
+  // IMPORTANT: "taken" must also mean "already linked in the roster". Without the
+  // rosterByCode check below, a second salesman sending his OWN free-looking code
+  // that happens to be linked (e.g. everyone re-sends /join SM-001 because only that
+  // card was circulated) used to clobber the pending slot of the FIRST unlinked
+  // claimer — pending holds one row per code, so the earlier request vanished and
+  // only ONE person ever got registered ("it only accepts SM-001, the rest never
+  // get in"). Rejecting with a clear message keeps every legitimate claim intact.
+  const dup =
+    pending.find((p) => p.code === code && String(p.tg) !== tgId) ||
+    joinsThisPass.find((p) => p.code === code && String(p.tg) !== tgId) ||
+    (Number(rosterByCode.get(code)?.tg || 0) && String(rosterByCode.get(code).tg) !== tgId
+      ? { code, tg: rosterByCode.get(code).tg }
+      : null);
   if (dup) {
     await tg("sendMessage", {
       chat_id: from.id,
@@ -190,6 +201,9 @@ async function recordJoin(pending, joinsThisPass, from, codeRaw, bootstrap = fal
   const j = joinsThisPass.findIndex((p) => p.code === code || String(p.tg) === tgId);
   if (j >= 0) joinsThisPass[j] = entry;
   else joinsThisPass.push(entry); // applied this pass when AUTO_ASSIGN/bootstrap allows
+  // Keep rosterByCode in sync with this pass's claims so a THIRD sender of the same
+  // code is rejected immediately (recordJoin above reads it for the dup check).
+  if (!rosterByCode.has(code)) rosterByCode.set(code, { code, tg: 0 });
   await tg("sendMessage", {
     chat_id: from.id,
     text:
@@ -421,6 +435,11 @@ async function main() {
   }
   // exposed to recordJoin so /join can answer "already linked" instantly
   rosterByTg = byTg;
+  // code -> salesman, also exposed to recordJoin: a claim for a code that is ALREADY
+  // linked to another telegram id must be rejected at message time. Without this the
+  // pending queue (one row per code) got clobbered by the second sender, so only ONE
+  // salesman ever made it onto the map — "it only accepts SM-001, the rest don't get in".
+  const rosterByCode = new Map((roster.salesmen || []).map((s) => [s.code, s]));
 
   // pending self-service claims: applied automatically when AUTO_ASSIGN=1,
   // otherwise kept as a queue the office reviews with `roster.mjs pending`
@@ -565,8 +584,8 @@ async function main() {
             chat_id: from.id,
             text: "❌ Wrong join secret · ❌ የተሳሳተ ሚስጥራዊ ቃል",
           });
-        } else if (await recordJoin(pending, joinsThisPass, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
-      } else if (await recordJoin(pending, joinsThisPass, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
+        } else if (await recordJoin(pending, joinsThisPass, rosterByCode, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
+      } else if (await recordJoin(pending, joinsThisPass, rosterByCode, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
       skipped++;
       continue;
     }
