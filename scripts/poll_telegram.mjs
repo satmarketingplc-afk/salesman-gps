@@ -133,7 +133,7 @@ const joinText = () =>
     "ስምዎን ለሥራ አስኪያጁ ይላኩ፣ ከዚያ ይጻፉ፦ <code>/join SM-001</code>",
   ].join("\n");
 
-async function recordJoin(pending, from, codeRaw, bootstrap = false) {
+async function recordJoin(pending, joinsThisPass, from, codeRaw, bootstrap = false) {
   const code = String(codeRaw || "").trim().toUpperCase().replace(/^#/, "");
   const tgId = String(from.id);
   if (!/^[A-Z0-9][A-Z0-9_-]{0,15}$/.test(code)) {
@@ -502,6 +502,11 @@ async function main() {
   let pinsDirty = false;
   let pinsAdded = 0;
   const pendingLoc = new Map(); // tgId -> { ts, lat, lng, acc }
+  // username -> salesman, for resolving pin ownership BEFORE the roster is written
+  // later in this pass (a /pin arriving in the same pass as its /join must work).
+  const byUserPre = new Map(
+    (roster.salesmen || []).filter((s) => s.username).map((s) => [String(s.username).toLowerCase().replace(/^@/, ""), s])
+  );
 
   for (const u of updates) {
     nextOffset = Math.max(nextOffset, u.update_id + 1);
@@ -560,16 +565,24 @@ async function main() {
             chat_id: from.id,
             text: "❌ Wrong join secret · ❌ የተሳሳተ ሚስጥራዊ ቃል",
           });
-        } else if (await recordJoin(pending, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
-      } else if (await recordJoin(pending, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
+        } else if (await recordJoin(pending, joinsThisPass, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
+      } else if (await recordJoin(pending, joinsThisPass, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
       skipped++;
       continue;
     }
 
     // ---- /pin and /unpin: check-in pins that ALWAYS stay on the manager map ----
+    const isUnpin = /^\/unpin(?:@\w+)?\b/i.test(cmd);
     const pinMatch = PIN_TEXT_RE.exec(cmd);
-    if (pinMatch) {
-      if (!sm) {
+    if (isUnpin || pinMatch) {
+      // In a pass where the salesman ALSO joined (/join + /pin together), byTg is not
+      // updated until later in this pass — fall back to the username match so his own
+      // pin works immediately after self-registration. Unknown users are still rejected.
+      const smPin =
+        sm ||
+        joinsThisPass.find((j) => String(j.tg) === String(from.id))?.sm ||
+        (from.username ? byUserPre.get(String(from.username).toLowerCase()) : undefined);
+      if (!smPin) {
         await tg("sendMessage", {
           chat_id: from.id,
           text:
@@ -577,24 +590,31 @@ async function main() {
             `መጀመሪያ ይተሳሰሉ፦ <code>/join SM-001</code>`,
           parse_mode: "HTML",
         });
-      } else if (/^\/unpin/i.test(cmd)) {
-        const before = allPins.length;
+      } else if (isUnpin) {
+        let removed = 0;
         for (let i = allPins.length - 1; i >= 0; i--) {
-          if (allPins[i].by === sm.code && !allPins[i].removedAt) allPins.splice(i, 1);
+          // keep the entry in the archive for history, but mark it removed so it
+          // disappears from the manager map and stops counting as active
+          if (allPins[i].by === smPin.code && !allPins[i].removedAt) {
+            allPins[i] = { ...allPins[i], removedAt: new Date().toISOString() };
+            removed++;
+          }
         }
-        pinsDirty = pinsDirty || allPins.length !== before;
+        pinsDirty = pinsDirty || removed > 0;
         await tg("sendMessage", {
           chat_id: from.id,
           text:
-            `🧹 Removed <b>${before - allPins.length}</b> active pin(s) of ${esc(sm.code)}. Old pins stay in the activity history.\n` +
-            `🧹 <b>${before - allPins.length}</b> ማስታወሻ(ዎች) ተወግደዋል።`,
+            `🧹 Removed <b>${removed}</b> active pin(s) of ${esc(smPin.code)}. Old pins stay in the activity history.\n` +
+            `🧹 <b>${removed}</b> ማስታወሻ(ዎች) ተወግደዋል።`,
           parse_mode: "HTML",
         });
       } else {
-        // newest point of this salesman seen so far (archive + this pass)
+        // newest point of this salesman seen so far (archive + this pass).
+        // NOTE: must use smPin, not sm — when /pin arrives in the same pass as the
+        // salesman's /join, `sm` is still undefined and the pin would be dropped.
         let last = null;
         for (const day of [dayKey(new Date().toISOString()), dayKey(new Date(Date.now() - 86400000).toISOString())]) {
-          const pts = await loadDay(sm.code, day);
+          const pts = await loadDay(smPin.code, day);
           for (const p of pts) if (!last || Date.parse(p.ts) > Date.parse(last.ts)) last = p;
         }
         const c = pendingLoc.get(String(from.id));
@@ -611,10 +631,10 @@ async function main() {
           const note = clipNote(pinMatch[1]);
           const entry = {
             id: `${from.id}-${msg.message_id}`,
-            by: sm.code,
-            byName: sm.name,
-            byNameAm: sm.nameAm || sm.name,
-            color: sm.color || "#2563eb",
+            by: smPin.code,
+            byName: smPin.name,
+            byNameAm: smPin.nameAm || smPin.name,
+            color: smPin.color || "#2563eb",
             ts: new Date((msg.edit_date || msg.date) * 1000).toISOString(),
             locTs: last.ts,
             lat: last.lat,
@@ -1042,7 +1062,12 @@ async function main() {
   // PIN_MAX_ACTIVITY entries in the activity feed (who pinned, when, note).
   const PIN_MAX_ACTIVITY = Number(process.env.PIN_MAX_ACTIVITY || 50);
   const byCode2 = new Map((roster.salesmen || []).map((s) => [s.code, s]));
-  const sortedPins = [...allPins].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+  // /unpin soft-deletes pins (removedAt) so the archive keeps full history, but a
+  // removed pin must NOT be published: without this filter the 📌 marker would stay
+  // on the manager map forever even after the salesman cleared it.
+  const sortedPins = allPins
+    .filter((p) => !p.removedAt)
+    .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
   const pinsOut = sortedPins.slice(0, PIN_MAX_ACTIVITY).map((p) => ({
     id: p.id,
     by: p.by,
@@ -1050,6 +1075,7 @@ async function main() {
     byNameAm: p.byNameAm || byCode2.get(p.by)?.nameAm || p.byName || p.by,
     color: p.color || byCode2.get(p.by)?.color || "#2563eb",
     ts: p.ts,
+    locTs: p.locTs || null,
     lat: p.lat,
     lng: p.lng,
     acc: p.acc ?? null,

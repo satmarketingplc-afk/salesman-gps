@@ -48,10 +48,6 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ ok: true, result }));
 });
 
-const mkUpdate = (id, from, extraMsg = {}) => ({
-  update_id: id,
-  message: { message_id: id, date: Math.floor(Date.now() / 1000), from, chat: { id: from.id }, ...extraMsg },
-});
 const loc = (lat, lng) => ({ location: { latitude: lat, longitude: lng, live_period: 8 * 3600 } });
 
 const people = [
