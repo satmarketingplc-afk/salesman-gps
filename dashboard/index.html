@@ -258,11 +258,11 @@ async function decrypt(payload, passphrase) {
   const ck = `${passphrase}|${payload.salt}|${payload.iter}`;
   let pending = webKeyCache.get(ck);
   if (!pending) {
-    pending = (async () => {
-      const key = await deriveDecryptKey(passphrase, payload.salt, payload.iter);
-      const raw = await crypto.subtle.exportKey("raw", key); // make it re-importable & cheap
-      return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
-    })();
+    // Cache the derived CryptoKey itself. It is non-extractable by design, so exportKey()
+    // throws InvalidAccessError — the old export+reimport "optimization" broke every login
+    // ("Could not reach GitHub") once it finally reached the deployed page. A CryptoKey is
+    // reusable across decrypt() calls, so no export is needed at all.
+    pending = deriveDecryptKey(passphrase, payload.salt, payload.iter);
     if (webKeyCache.size >= KEY_CACHE_MAX) webKeyCache.delete(webKeyCache.keys().next().value);
     webKeyCache.set(ck, pending);
     pending.catch(() => webKeyCache.delete(ck)); // never cache a failed derivation
