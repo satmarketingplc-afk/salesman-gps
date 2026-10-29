@@ -1,0 +1,48 @@
+name: deploy-pages
+
+# The repo's Pages source is "GitHub Actions" (build_type=workflow). While this workflow was
+# missing, pushes updated the repo but the public site stayed frozen on the last build
+# (Oct 27). Deploy only when the site itself changes: the live/customers payloads are read
+# straight from raw.githubusercontent.com, so data commits must NOT trigger a rebuild.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.html"
+      - "**/*.css"
+      - "**/*.js"
+      - "**/*.mjs"
+      - "**/*.svg"
+      - "**/*.png"
+      - "**/*.ico"
+      - "**/*.webmanifest"
+      - "data/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+          # encrypted payloads are already public in the repo; keep the artifact lean
+          retention-days: 1
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,9 +1,12 @@
 name: poll-telegram
 
-# Cron-only cadence: the run used to dispatch itself again at the end of every pass
-# ("chain the next run"). That burned free-tier Actions minutes and — worse — each chain
-# produced a fresh commit whose author was the GitHub Actions bot, bloating git history.
-# The 5-minute cron below is now the single scheduler; nothing self-dispatches.
+# Cadence: self-chaining + a cron safety net.
+#
+# GitHub's scheduler is best-effort on public repos: a "*/5" cron is routinely delayed to
+# hours apart under load. Relying on the cron alone made the map refresh every ~4.5 HOURS
+# (the Oct 27 regression) — a live location shared at 08:00 stayed invisible all morning.
+# So the last step dispatches the next run (proven 4–5 min cycle), and the cron stays as the
+# re-seed: if a dispatch is ever rejected, the schedule restarts the chain.
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -12,11 +15,12 @@ on:
 concurrency:
   group: telegram-poll
   # never cancel a pass mid-flight — it would lose the uncommitted archive and offset;
-  # queue instead (the cron keeps the cadence)
+  # queue instead (the chained dispatch keeps the cadence)
   cancel-in-progress: false
 
 permissions:
   contents: write
+  actions: write   # the chain step dispatches the next poll run
 
 jobs:
   poll:
@@ -119,3 +123,24 @@ jobs:
 
             sleep 15
           done
+
+      # Keep the 4–5 minute cycle alive without depending on the (heavily throttled) cron.
+      # Retries cover a transient GitHub 5xx/rate-limit; if all three fail the cron re-seeds.
+      - name: Chain the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /tmp/chain.json -w "%{http_code}" -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/poll.yml/dispatches" \
+              -d '{"ref":"main"}')
+            echo "chain dispatch attempt $attempt -> HTTP $code"
+            if [ "$code" = "204" ]; then exit 0; fi
+            head -c 400 /tmp/chain.json || true
+            echo
+            sleep 10
+          done
+          echo "::warning::chain dispatch failed 3x — the 5-minute cron will re-seed the loop"
