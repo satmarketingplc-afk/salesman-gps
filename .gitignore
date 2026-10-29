@@ -1,6 +1,1 @@
-node_modules/
-dist/
-.env
-.DS_Store
-Thumbs.db
-private/roster.plain.json
+.tmp-queue/
