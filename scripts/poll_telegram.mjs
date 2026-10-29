@@ -101,9 +101,11 @@ function welcomeText() {
     "👋 <b>Salesman GPS</b>",
     "1 · Share live location: 📎 → Location → <b>Share Live Location</b> → 8 hours.",
     "2 · New customer: tap the button below (or the menu button).",
+    "3 · Check-in pin: send <code>/pin</code> (optionally <code>/pin note</code>) — it stays on the manager's map permanently; <code>/unpin</code> removes your pins.",
     "────────",
     "1 · ቀጥታ አካባቢ ያጋሩ: 📎 → አካባቢ → <b>ቀጥታ አካባቢ</b> → 8 ሰዓት።",
     "2 · አዲስ ደንበኛ: ከታች ያለውን ቁልፍ ይጫኑ።",
+    "3 · የአካባቢ ማስታወሻ: <code>/pin</code> ይላኩ (ወይም <code>/pin ማስታወሻ</code>) — በካርታው ላይ ለዘላቸው ይቆያል፤ ለማጥፋት <code>/unpin</code>።",
   ].join("\n");
 }
 
@@ -198,6 +200,29 @@ async function recordJoin(pending, from, codeRaw, bootstrap = false) {
     parse_mode: "HTML",
   });
   return true;
+}
+
+// ---- /pin — "check-in" pin that must ALWAYS be visible on the manager map -----
+// A salesman sends /pin (optionally with a note). The bot takes his most recent
+// location and freezes it as an official pin: who pinned it, when, where, and the
+// note. Pins live in archive/pins.enc.json (encrypted, committed with the archive),
+// are published inside live.enc.json so the dashboard can draw them permanently,
+// and every pin also appears in the activity feed next to the trail.
+const PIN_TEXT_RE = /^\/pin(?:@\w+)?(?:\s+([\s\S]+))?$/i;
+const clipNote = (v) => String(v ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 120);
+const pinFileOf = () => path.join(ARCHIVE, "pins.enc.json");
+
+async function loadPins() {
+  const box = await readJson(pinFileOf(), null);
+  if (!box) return [];
+  try {
+    const list = decryptJson(box, PASS());
+    return Array.isArray(list) ? list : [];
+  } catch (err) {
+    errorCount++;
+    console.error(`[poller] cannot decrypt ${pinFile()} — ignoring pins: ${err.message}`);
+    return [];
+  }
 }
 
 const readJson = async (file, fallback) => {
@@ -470,6 +495,14 @@ async function main() {
   const custMonths = new Map(); // month -> { list, ids:Set }, loaded lazily
   const newCustomers = [];
 
+  // /pin state for this pass: archive + newly created pins, dedupe by id, and the
+  // newest location seen per telegram id so a /pin sent right after a share works.
+  const allPins = await loadPins();
+  const pinsById = new Set(allPins.map((p) => p.id));
+  let pinsDirty = false;
+  let pinsAdded = 0;
+  const pendingLoc = new Map(); // tgId -> { ts, lat, lng, acc }
+
   for (const u of updates) {
     nextOffset = Math.max(nextOffset, u.update_id + 1);
     const msg = u.edited_message || u.message;
@@ -529,6 +562,83 @@ async function main() {
           });
         } else if (await recordJoin(pending, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
       } else if (await recordJoin(pending, from, joinMatch[1], bootstrapMode)) pendingDirty = true;
+      skipped++;
+      continue;
+    }
+
+    // ---- /pin and /unpin: check-in pins that ALWAYS stay on the manager map ----
+    const pinMatch = PIN_TEXT_RE.exec(cmd);
+    if (pinMatch) {
+      if (!sm) {
+        await tg("sendMessage", {
+          chat_id: from.id,
+          text:
+            `You are not registered yet — link first with <code>/join SM-001</code>.\n` +
+            `መጀመሪያ ይተሳሰሉ፦ <code>/join SM-001</code>`,
+          parse_mode: "HTML",
+        });
+      } else if (/^\/unpin/i.test(cmd)) {
+        const before = allPins.length;
+        for (let i = allPins.length - 1; i >= 0; i--) {
+          if (allPins[i].by === sm.code && !allPins[i].removedAt) allPins.splice(i, 1);
+        }
+        pinsDirty = pinsDirty || allPins.length !== before;
+        await tg("sendMessage", {
+          chat_id: from.id,
+          text:
+            `🧹 Removed <b>${before - allPins.length}</b> active pin(s) of ${esc(sm.code)}. Old pins stay in the activity history.\n` +
+            `🧹 <b>${before - allPins.length}</b> ማስታወሻ(ዎች) ተወግደዋል።`,
+          parse_mode: "HTML",
+        });
+      } else {
+        // newest point of this salesman seen so far (archive + this pass)
+        let last = null;
+        for (const day of [dayKey(new Date().toISOString()), dayKey(new Date(Date.now() - 86400000).toISOString())]) {
+          const pts = await loadDay(sm.code, day);
+          for (const p of pts) if (!last || Date.parse(p.ts) > Date.parse(last.ts)) last = p;
+        }
+        const c = pendingLoc.get(String(from.id));
+        if (c && (!last || Date.parse(c.ts) > Date.parse(last.ts))) last = c;
+        if (!last) {
+          await tg("sendMessage", {
+            chat_id: from.id,
+            text:
+              `📍 No location yet — share your live location first (📎 → Location → Share Live Location), then send <code>/pin</code> again.\n` +
+              `📍 መጀመሪያ ቀጥታ አካባቢ ያጋሩ (📎 → አካባቢ → ቀጥታ አካባቢ)፣ ከዚያ <code>/pin</code> ይላኩ።`,
+            parse_mode: "HTML",
+          });
+        } else {
+          const note = clipNote(pinMatch[1]);
+          const entry = {
+            id: `${from.id}-${msg.message_id}`,
+            by: sm.code,
+            byName: sm.name,
+            byNameAm: sm.nameAm || sm.name,
+            color: sm.color || "#2563eb",
+            ts: new Date((msg.edit_date || msg.date) * 1000).toISOString(),
+            locTs: last.ts,
+            lat: last.lat,
+            lng: last.lng,
+            acc: last.acc ?? null,
+            note: note || null,
+          };
+          if (!pinsById.has(entry.id)) {
+            pinsById.add(entry.id);
+            allPins.push(entry);
+            pinsDirty = true;
+            pinsAdded++;
+          }
+          await tg("sendMessage", {
+            chat_id: from.id,
+            text:
+              `📌 <b>Pinned!</b> The office sees this spot permanently on the map.\n` +
+              (note ? `Note · ማስታወሻ: <i>${esc(note)}</i>\n` : "") +
+              `Remove with <code>/unpin</code> · ለማጥፋት <code>/unpin</code>\n` +
+              `────────\n📌 <b>ተመልክቷል!</b> ቢሮው ይህን አካባቢ በካርታው ላይ ሁልጊዜ ይመለከታል።`,
+            parse_mode: "HTML",
+          });
+        }
+      }
       skipped++;
       continue;
     }
@@ -595,6 +705,14 @@ async function main() {
       live: !!loc.live_period,
       src: "telegram",
     };
+
+    // remember the newest point per person for /pin in this same pass
+    if (from.id) {
+      const prevC = pendingLoc.get(String(from.id));
+      if (!prevC || Date.parse(ts) > Date.parse(prevC.ts)) {
+        pendingLoc.set(String(from.id), { ts, lat: ping.lat, lng: ping.lng, acc: ping.acc });
+      }
+    }
 
     if (!sm) {
       // stable key tg+ts: replayed updates (offset committed only hourly) must not
@@ -681,6 +799,13 @@ async function main() {
 
   if (unmapped.length) {
     await writeJson(path.join(ARCHIVE, "unmapped.enc.json"), encryptJson(unmapped.slice(-500), PASS()));
+  }
+
+  // ---- persist /pin check-ins ---------------------------------------------
+  // Newest-first, capped so the file stays small enough to commit every pass.
+  if (pinsDirty) {
+    allPins.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+    await writeJson(pinFileOf(), encryptJson(allPins.slice(0, 1000), PASS()));
   }
 
   // ---- apply self-service /join claims ------------------------------------
@@ -912,6 +1037,25 @@ async function main() {
     });
   }
 
+  // ---- pins for the manager map: ALWAYS shown, even if the person is offline --
+  // Newest-first; the dashboard draws a 📌 marker per active pin and lists the last
+  // PIN_MAX_ACTIVITY entries in the activity feed (who pinned, when, note).
+  const PIN_MAX_ACTIVITY = Number(process.env.PIN_MAX_ACTIVITY || 50);
+  const byCode2 = new Map((roster.salesmen || []).map((s) => [s.code, s]));
+  const sortedPins = [...allPins].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+  const pinsOut = sortedPins.slice(0, PIN_MAX_ACTIVITY).map((p) => ({
+    id: p.id,
+    by: p.by,
+    byName: p.byName || byCode2.get(p.by)?.name || p.by,
+    byNameAm: p.byNameAm || byCode2.get(p.by)?.nameAm || p.byName || p.by,
+    color: p.color || byCode2.get(p.by)?.color || "#2563eb",
+    ts: p.ts,
+    lat: p.lat,
+    lng: p.lng,
+    acc: p.acc ?? null,
+    note: p.note || null,
+  }));
+
   // Bootstrap guard: if we started with no roster file and STILL nobody is linked
   // (no /join arrived), stop with the actionable error instead of committing an
   // empty map that looks like "the system lost everyone".
@@ -921,7 +1065,7 @@ async function main() {
   bootstrapMode = false;
 
   await fs.mkdir(OUT_DIR, { recursive: true });
-  await writeJson(path.join(OUT_DIR, "live.enc.json"), encryptJson({ generated: new Date().toISOString(), salesmen: live }, PASS()));
+  await writeJson(path.join(OUT_DIR, "live.enc.json"), encryptJson({ generated: new Date().toISOString(), salesmen: live, pins: pinsOut }, PASS()));
 
   // Daily activity rollup for the Reports page. Only built on the passes that commit the
   // archive (once an hour), so the extra PBKDF2 work is rare.
@@ -953,7 +1097,7 @@ async function main() {
   console.log(
     `[poller] updates=${updates.length} stored=${stored} skipped=${skipped} ` +
       `cards=${newCustomers.length} replied=${replied} people=${live.length} ` +
-      `joined=${joined} errors=${errorCount} dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
+      `joined=${joined} pins=${pinsAdded} errors=${errorCount} dirty=${[...dirty].join(",") || "-"} offset=${nextOffset}`
   );
   if (noTg || noPoints) {
     console.log(`[poller] not on map: ${noTg} salesman without telegram id (/join CODE), ${noPoints} linked but no location today`);

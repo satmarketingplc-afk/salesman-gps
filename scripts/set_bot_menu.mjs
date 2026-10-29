@@ -55,6 +55,9 @@ results.push(await call("setMyCommands", {
   commands: [
     { command: "start", description: "Welcome · እንኳን ደህና መጡ" },
     { command: "help", description: "How to use · እንዴት እንደሚጠቀሙ" },
+    { command: "join", description: "Link your account · ታገናኙ (SM-001)" },
+    { command: "pin", description: "Pin this spot on the map · አካባቢ ይመልክቱ" },
+    { command: "unpin", description: "Remove my pins · ማስታወሻዎችን ያጥፉ" },
   ],
 }));
 results.push(await call("setMyShortDescription", { short_description: short }));
