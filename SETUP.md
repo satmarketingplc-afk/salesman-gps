@@ -43,6 +43,25 @@ git push
 
 The next poll (≤5 min) picks him up and his pin appears.
 
+### Fastest path: self-service `/join` (no CLI at all)
+
+With `AUTO_ASSIGN=1` (the default) the salesman links himself: he opens the bot and types
+`/join SM-001`. The next poll pass writes the Telegram id into the roster automatically,
+recovers any locations he shared *before* linking, and messages him to share live location.
+Nothing to type on your PC. If you run with `AUTO_ASSIGN=0`, claims wait in
+`private/pending.enc.json` — review them with `node scripts/roster.mjs pending` and approve
+with `node scripts/roster.mjs pending --apply`, then commit + push both files under `private/`.
+
+**New device / new phone:** the person keeps the same Telegram account, so nothing changes —
+he just opens the bot on the new phone and shares live location again. Only a *new Telegram
+account* needs re-linking (`/join CODE` or `roster.mjs tg`).
+
+**Nobody is visible at all?** The usual cause is an unpopulated roster: if
+`private/roster.enc.json` is missing, the poller falls back to the public template
+`data/salesmen.json`, which has `tg: 0` placeholders for everyone — every ping then lands in
+`unmapped` and the map stays empty. Run `node scripts/diagnose.mjs` (or `roster.mjs list`,
+which now warns about this state) and link real ids as above.
+
 ---
 
 ## 3. Secrets (already set, for reference)
@@ -277,7 +296,7 @@ Releases). The free plan is not the limit — the whole-file rewrite pattern is.
 | Symptom | Cause | Fix |
 |---|---|---|
 | Map says "No positions yet" | bot has no location yet | share live location to the bot |
-| Nobody appears | telegram id not in roster | `node scripts/roster.mjs unmapped` then `add` |
+| Nobody appears | telegram id not in roster | `node scripts/roster.mjs unmapped` then `add`; or fastest: have each salesman send `/join SM-00X` to the bot (AUTO_ASSIGN links them on the next pass). If `private/roster.enc.json` is missing entirely, the poller falls back to the `tg:0` placeholder template and nobody can ever appear — run `node scripts/diagnose.mjs` to confirm |
 | "Wrong passphrase" | typo, leading/trailing space from copy-paste, Caps Lock, or the secret was changed/rotated | re-enter carefully (spaces are now trimmed automatically); verify with `node scripts/diagnose.mjs` using the same value; if Render and GitHub Actions hold different values, sync them (`gh secret set DASH_PASSPHRASE` + Render env) |
 | "Wrong passphrase" but the phrase IS correct | a network hiccup or a half-written/corrupt `live.enc.json` used to be misreported as a wrong passphrase | fixed: pages now show "Could not reach GitHub — check your connection" for load errors and only show "Wrong passphrase" when decryption itself fails. If you still see it after a hard refresh, run the definitive test below |
 | Pin frozen for hours | GitHub disabled the schedule after 60 days idle | any push re-enables it; bot commits normally keep it alive |
