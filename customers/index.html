@@ -272,6 +272,9 @@ const DATA_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO_NAME}/
 // One in-flight load at a time — manual refreshes and any future auto-refresh must not
 // stack duplicate fetches + PBKDF2 derivations on slow connections.
 let loading = null;
+// One in-flight load at a time: the auto-refresh interval and a manual reload can
+// overlap on a slow connection — without this guard every overlap meant a duplicate
+// fetch AND a duplicate PBKDF2 derivation on the main thread.
 function load() {
   if (loading) return loading;
   loading = loadOnce().finally(() => { loading = null; });
