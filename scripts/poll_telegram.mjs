@@ -660,6 +660,20 @@ async function main() {
     dirty.add(sm.code);
     joined++;
     appliedClaims.push(p);
+    // Tell the salesman the office verified him and ask for the location NOW —
+    // otherwise a newly linked person has no idea that the map is waiting for him.
+    await tg("sendMessage", {
+      chat_id: Number(p.tg),
+      text:
+        `✅ <b>Verified by the office</b> — you are linked as <b>${esc(sm.code)} ${esc(sm.name || "")}</b>.\n` +
+        `Now send your location: 📎 → <b>Location</b> → <b>Share Live Location</b> → <b>8 hours</b>.\n` +
+        `Your pin appears on the manager's map within ~4 minutes.\n` +
+        `────────\n` +
+        `✅ <b>በቢሮው ተረጋግጠዋል</b> — <b>${esc(sm.code)} ${esc(sm.nameAm || sm.name || "")}</b> ተያይዘዋል።\n` +
+        `አሁን አካባቢዎን ይላኩ፦ 📎 → <b>Location</b> → <b>Share Live Location</b> → <b>8 ሰዓት</b>።\n` +
+        `በካርታው ላይ በ~4 ደቂቃ ውስጥ ይታያሉ።`,
+      parse_mode: "HTML",
+    });
   }
 
   // ---- recover locations sent BEFORE the link ------------------------------
