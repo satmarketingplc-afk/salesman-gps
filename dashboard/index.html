@@ -61,6 +61,14 @@
   .leaflet-tooltip.pinlabel{background:rgba(15,23,42,.88); color:#fff; border:0; border-radius:6px;
     font-size:11px; font-weight:600; padding:3px 7px; box-shadow:0 2px 8px rgba(15,23,42,.25)}
   .leaflet-tooltip.pinlabel::before{display:none}
+  .pinmarkbox{background:transparent;border:0;box-shadow:none}
+  .pinmark{transform:rotate(-15deg);filter:drop-shadow(0 2px 3px rgba(15,23,42,.4));font-size:22px;line-height:1}
+  .sectionhead{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin:10px 2px 2px;display:flex;align-items:center;gap:6px}
+  .activity{border:1px solid var(--line);border-radius:12px;background:#fff;padding:9px 11px;display:flex;flex-direction:column;gap:8px}
+  .actitem{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--muted);line-height:1.45}
+  .actitem .dot{margin-top:3px}
+  .actitem b{color:var(--ink);font-weight:600}
+  .actnote{color:var(--ink);font-style:italic}
   .toast{
     position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(16px);
     background:var(--ink); color:#fff; font-size:13px; line-height:1.4; padding:9px 14px;
@@ -153,6 +161,7 @@ const I18N = {
     passHint:"The positions are encrypted. Enter the dashboard passphrase to open the map.",
     open:"Open map", wrongPass:"Wrong passphrase — trim extra spaces and capital letters, then try again. If it still fails, the team changed the passphrase or re-encrypted the data with a new one; ask for the current value.", mismatch:"This is NOT a typing problem: the encrypted data on GitHub was produced with a DIFFERENT DASH_PASSPHRASE secret (secret drift between GitHub Actions and Render). An admin must set the same value in both places — see SETUP.md \"Definitive passphrase test\".", staleFile:"The live file on GitHub looks older than 2 hours — the poller may have stopped or been re-encrypted with a different secret. Check the Actions tab for 'poll-telegram'.", noData:"No positions yet. Send a live location to the bot.", emptyTitle:"No live position yet", emptyBody:"A salesman appears here only while he is sharing a Telegram live location: open @salesmaplocationbot → 📎 → Location → Share Live Location → 8 hours. The poller checks every ~4 minutes, so a new share shows up within 5 minutes.", pollerStale:"The live file has not been refreshed for {n} min — the poller may have stopped. Check the Actions tab for 'poll-telegram'.", loadFail:"Could not reach GitHub — check your connection. The map will retry automatically; your passphrase was kept.",
     footer:"Accuracy circles are real GPS error, not decoration.",
+    activity:"Check-in activity", pinned:"pinned", noActivity:"No check-ins yet · salesmen send /pin in the bot",
     generated:"updated", people:"people", m:"m", km:"km"
   },
   am: {
@@ -167,6 +176,7 @@ const I18N = {
     passHint:"አካባቢዎቹ ተመስጥረዋል። ካርታውን ለመክፈት የመግቢያ ቃሉን ያስገቡ።",
     open:"ካርታውን ክፈት", wrongPass:"የመግቢያ ቃሉ ትክክል አይደለም — ቦና ማርክ ሲል እና የቁምፊ ኮርሰር (Caps Lock) ማረጋገጥ ያስፈልጋል። በተደጋጋሚ ከአልሞ ለteam መጠየቅ አለባችሁ።", mismatch:"ይህ የእርስዎ ጥያቄ ችግር አይደለም፤ በGitHub ላይ ያለው መረጃ በተለየ DASH_PASSPHRASE ሚስጥር ተመስጥሮአል (በGitHub Actions እና Render መካከል ያለ ልዩነት)። አስተዳዳሪ በሁለቱም ቦታዎች ተመሳሳይ እሴት ማስቀመጥ አለበት።", noData:"እስካሁን አካባቢ የለም። ለቦቱ ቀጥታ አካባቢ ይላኩ።", emptyTitle:"እስካሁን ቀጥታ አካባቢ የለም", emptyBody:"ሰውየው በቴሌግራም ቀጥታ አካባቢ (Live Location) እያጋራ ሳለ ብቻ እዚህ ይታያል፦ @salesmaplocationbot → 📎 → Location → Share Live Location → 8 ሰዓት። ፖለር በየ~4 ደቂቃው ይፈትሻል፤ አዲስ ስርጭት በ5 ደቂቃ ውስጥ ይታያል።", pollerStale:"ፋይሉ ከ{n} ደቂቃ በፊት ተሻሽሏል — ፖለር ሊቆም ይችላል። በActions ገጽ 'poll-telegram' ይመልከቱ።", loadFail:"GitHub መድረስ አልተቻለም — መገናኛችሁን ያረጋግጡ። በራስ-ሰር እንደገና ይሞክራል፤ የመግቢያ ቃሉ ተጠብቋል።",
     footer:"የትክክለኛነት ክበቦች እውነተኛ የጂፒኤስ ስህተት ናቸው።",
+    activity:"የማስታወሻ እንቅስቃሴ", pinned:"ማስታወሻ አስቀምጧል", noActivity:"እስካሁን ማስታወሻ የለም · ሠራተኞች በቦቱ /pin ይላኩ",
     generated:"የተዘመነ", people:"ሰዎች", m:"ሜ", km:"ኪ.ሜ"
   }
 };
@@ -433,6 +443,36 @@ function draw(fit = true) {
     bounds.extend([p.lat, p.lng]);
   });
 
+  // ---- /pin check-ins: ALWAYS on the map (even after the person goes offline) ----
+  const pins = data.pins || [];
+  pins.forEach((k) => {
+    const color = safeColor(k.color);
+    const mk = L.divIcon({
+      className: "pinmarkbox",
+      html: '<div class="pinmark">📌</div>',
+      iconSize: [24, 24],
+      iconAnchor: [12, 22],
+    });
+    const m = L.marker([k.lat, k.lng], { icon: mk, zIndexOffset: 800 }).addTo(map);
+    const who = esc(lang === "am" ? (k.byNameAm || k.byName || k.by) : (k.byName || k.by));
+    const when = new Date(k.ts).toLocaleString("en-GB", { timeZone: "Africa/Addis_Ababa" }) + " EAT";
+    m.bindPopup(
+      `<b>📌 ${t("pinned")}</b><br>` +
+      `${who} · <span style="color:${color};font-weight:700">${esc(k.by)}</span><br>` +
+      `🕒 ${when}<br>` +
+      (k.note ? `<i>${esc(k.note)}</i><br>` : "") +
+      `${esc(k.lat.toFixed(5))}, ${esc(k.lng.toFixed(5))}`
+    );
+    m.bindTooltip(`📌 ${who}`, { direction: "top", offset: [0, -20], className: "pinlabel" });
+    if (k.acc) {
+      layers.push(L.circle([k.lat, k.lng], {
+        radius: k.acc, color, weight: 1, opacity: 0.3, dashArray: "4 4", fillColor: color, fillOpacity: 0.05
+      }).addTo(map));
+    }
+    layers.push(m);
+    bounds.extend([k.lat, k.lng]);
+  });
+
   if (fit && bounds.isValid()) map.fitBounds(bounds.pad(0.25), { maxZoom: 15 });
 }
 
@@ -449,7 +489,7 @@ function render() {
   const stale = ageMin != null && ageMin > 20
     ? `<div class="stale">${esc(t("pollerStale").replace("{n}", String(ageMin)))}</div>` : "";
   if (!data) { list.innerHTML = `<div class="empty">${t("noData")}</div>`; return; }
-  if (!data.salesmen.length) {
+  if (!data.salesmen.length && !(data.pins || []).length) {
     // Empty is not an error: say WHY it is empty and what the salesman must do.
     list.innerHTML = stale +
       `<div class="empty"><b>${esc(t("emptyTitle"))}</b><br>${esc(t("emptyBody"))}</div>`;
@@ -484,6 +524,38 @@ function render() {
     card.onclick = () => setActive(p.code);
     list.appendChild(card);
   });
+
+  // ---- activity feed: who pinned, when, with what note ----
+  const pins = data.pins || [];
+  const head = document.createElement("div");
+  head.className = "sectionhead";
+  head.textContent = `📌 ${t("activity")}`;
+  list.appendChild(head);
+  if (!pins.length) {
+    const none = document.createElement("div");
+    none.className = "empty";
+    none.textContent = t("noActivity");
+    list.appendChild(none);
+    return;
+  }
+  const box = document.createElement("div");
+  box.className = "activity";
+  pins.forEach((k) => {
+    const item = document.createElement("div");
+    item.className = "actitem";
+    const when = new Date(k.ts).toLocaleString("en-GB", { timeZone: "Africa/Addis_Ababa" }) + " EAT";
+    item.innerHTML =
+      `<span class="dot" style="background:${safeColor(k.color)}"></span>` +
+      `<span>📌 <b>${esc(lang === "am" ? (k.byNameAm || k.byName || k.by) : (k.byName || k.by))}</b> ` +
+      `(${esc(k.by)}) ${esc(t("pinned"))} · ${ago(k.ts)}<br>` +
+      `<span style="font-size:11px">${esc(when)}</span>` +
+      (k.note ? `<br><span class="actnote">“${esc(k.note)}”</span>` : "") +
+      `</span>`;
+    item.style.cursor = "pointer";
+    item.onclick = () => map.flyTo([k.lat, k.lng], 16, { duration: 0.8 });
+    box.appendChild(item);
+  });
+  list.appendChild(box);
 }
 
 $("lang").onclick = () => { lang = lang === "en" ? "am" : "en"; applyLang(); };

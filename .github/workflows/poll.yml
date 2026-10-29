@@ -79,6 +79,8 @@ jobs:
               if [ -n "$archive_due" ]; then
                 git add archive/daily archive/unmapped.enc.json archive/state dashboard/public/reports.enc.json
               fi
+              # /pin check-ins: small file, commit whenever pins changed (every pass)
+              if [ -f archive/pins.enc.json ]; then git add archive/pins.enc.json; fi
               # self-service /join: roster + pending queue only change when someone links,
               # and both files are encrypted — safe to commit, tiny, rare
               if [ -f private/roster.enc.json ]; then git add private/roster.enc.json; fi
