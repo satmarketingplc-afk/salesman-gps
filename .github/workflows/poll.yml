@@ -48,7 +48,9 @@ jobs:
           set -u
           for i in $(seq 1 16); do
             commit_pass=""
-            if [ $((i % 9)) -eq 0 ] || [ "$i" -eq 16 ]; then commit_pass=1; fi
+            # One commit per pass (~4 min) is enough for the dashboard heartbeat (it warns
+            # only after 20 min) and halves the history the old twice-per-pass rule wrote.
+            if [ "$i" -eq 16 ]; then commit_pass=1; fi
 
             # Free-tier economy: the live payload (small) commits every pass, while the
             # archive + offset + report land at most once an hour. Git stores a full copy of
