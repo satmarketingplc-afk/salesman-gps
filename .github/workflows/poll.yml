@@ -40,7 +40,7 @@ jobs:
           git config user.name  "smgps-bot"
           git config user.email "smgps-bot@users.noreply.github.com"
 
-      - name: Poll loop (~4 min, every 15 s; commits on the first, middle and last pass)
+      - name: Poll loop (~4 min, every 15 s; commits on the last pass)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           DASH_PASSPHRASE: ${{ secrets.DASH_PASSPHRASE }}

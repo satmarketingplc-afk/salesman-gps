@@ -131,7 +131,7 @@ start command and the health check.
 | `GH_DISPATCH_TOKEN` | fine-grained PAT, **Actions: write**, this repo | optional |
 
 With `GH_DISPATCH_TOKEN` set, Refresh also starts a poll run immediately, so the new point is
-committed about 2 minutes later instead of waiting for the next run (≤ 5 min); the raw CDN
+committed about 1 minute later instead of waiting for the next pass (≤ 4 min); the raw CDN
 can add a few more minutes before every browser sees it.
 
 ### What Refresh does
@@ -147,11 +147,11 @@ location → 8 hours. Cooldowns: 20 s globally, 90 s per salesman.
 ### Keep it awake
 
 Render's free web service sleeps after ~15 minutes without traffic, and a sleeping service
-cannot wake itself. `.github/workflows/keepalive.yml` pings `/healthz` every 10 minutes, but
-GitHub's scheduler is best-effort — also add a free monitor (cron-job.org or UptimeRobot),
-URL `https://<service>.onrender.com/healthz`, every 5 minutes.
+cannot wake itself. Add a free external monitor (cron-job.org or UptimeRobot) on
+`https://<service>.onrender.com/healthz`, every 5 minutes — the in-repo keepalive workflow
+was removed because GitHub's scheduler fired it hours apart and it only burned runs.
 
-**Auto-Deploy stays OFF** (`render.yaml` sets it): the poller commits every ~2 minutes and a
+**Auto-Deploy stays OFF** (`render.yaml` sets it): the poller commits every ~4 minutes and a
 rebuild is never needed for data. Deploy manually after a code change.
 
 ---
@@ -161,7 +161,7 @@ rebuild is never needed for data. Deploy manually after a code change.
 - Salesman taps **Share live location → 8 hours** at the start of the shift (the app reminds him).
 - Manager opens the dashboard, types the passphrase once per browser session.
 - Action re-triggers itself at the end of every 4.5-minute run (GitHub cron is only a backup).
-  It commits the live map every ~2 minutes and the encrypted archive once an hour.
+  It commits the live map every ~4 minutes and the encrypted archive once an hour.
 
 ---
 
@@ -195,7 +195,7 @@ Salesmen save customers from inside Telegram — no extra app, no token on the p
 1. The salesman opens the bot and taps the **menu button** ("New customer", bottom of the chat).
    A form opens inside Telegram: name, phone, shop, product, quantity, status, note.
 2. **Save** → the card goes back to the bot, the form closes.
-3. The poller writes it within ~2 minutes to:
+3. The poller writes it within ~4 minutes to:
    - `archive/customers/YYYY-MM.enc.json` — the encrypted archive, one file per month;
    - `dashboard/public/customers.enc.json` — the rolling view the management page reads.
 
@@ -245,7 +245,7 @@ under two days at this polling rate.
 Storage is the part that needs discipline. Git keeps a full copy of every version of every
 file, and an encrypted archive does not delta-compress. So:
 
-- the **live payload** (`dashboard/public/live.enc.json`, a few KB) is committed every ~2 min;
+- the **live payload** (`dashboard/public/live.enc.json`, a few KB) is committed every ~4 min;
 - the **archive** (the day file that keeps growing) is committed **at most once an hour**,
   together with the Telegram offset and the report.
 
