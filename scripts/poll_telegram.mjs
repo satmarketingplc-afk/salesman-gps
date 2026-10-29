@@ -302,7 +302,21 @@ async function loadRoster() {
       fail("cannot decrypt roster — DASH_PASSPHRASE does not match the one used to create it");
     }
   }
+  // The public template is only a code list. A roster whose entries all have tg=0
+  // means NOBODY can be linked — every ping falls into the unmapped pile and the
+  // dashboard shows zero salesmen ("new device does not work at all"). Treat that
+  // state as an error so the office gets an actionable message instead of an
+  // silently empty map.
   const template = await readJson(path.join(ROOT, "data", "salesmen.json"), { salesmen: [] });
+  const linked = (template.salesmen || []).filter((s) => s.active !== false && Number(s.tg));
+  if (!linked.length) {
+    fail(
+      "roster has no Telegram links: private/roster.enc.json is missing and data/salesmen.json " +
+        "is the placeholder template (tg=0 for everyone). Create the real roster with " +
+        "`node scripts/roster.mjs add SM-001 \"Name\" \"ስም\" <telegram id> \"#color\"` or let " +
+        "salesmen self-link with /join CODE in the bot, then commit private/roster.enc.json."
+    );
+  }
   console.warn("[poller] no encrypted roster yet — using the public template (no real telegram ids)");
   return template;
 }

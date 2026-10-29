@@ -66,6 +66,21 @@ async function main() {
   }
   const salesmen = roster.salesmen || [];
   console.log(`Roster: ${salesmen.length} salesmen\n`);
+  if (salesmen.length && !salesmen.some((s) => s.active !== false && Number(s.tg))) {
+    bad("NOBODY in the roster is linked to a Telegram id (all tg=0). Every ping falls into `unmapped` and the map stays empty — this is why no salesman is visible.");
+  }
+
+  // self-service /join claims waiting for approval (AUTO_ASSIGN=0 mode leaves them here)
+  const pendingBox = await fetchJson(`${BASE}/private/pending.enc.json`);
+  if (!pendingBox.__http) {
+    try {
+      const pend = decryptJson(pendingBox, PASS);
+      if (Array.isArray(pend) && pend.length) {
+        note(`Pending /join claims (${pend.length}): ${pend.map((p) => `${p.code}→tg=${p.tg}${p.who ? ` (${p.who})` : ""}`).join(", ")}`);
+        note("Approve with: node scripts/roster.mjs pending --apply   (then commit + push private/roster.enc.json)");
+      }
+    } catch { /* unreadable pending file is not fatal */ }
+  }
 
   const liveBox = await fetchJson(`${BASE}/dashboard/public/live.enc.json`);
   let live = [];
