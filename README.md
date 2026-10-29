@@ -43,4 +43,5 @@ data only when opened at the live URLs:
 | `customers/index.html` | management board: one column per salesman, CSV |
 | `scripts/set_bot_menu.mjs` | points the bot's menu button at the customer form |
 | `dashboard/index.html` | map, list, EN/አማርኛ, passphrase gate |
-| `.github/workflows/poll.yml` | 5-minute cron, 4.5-minute polling loop |
+| `.github/workflows/poll.yml` | self-chaining 4-minute poll loop (5-minute cron is only the backup) |
+| `.github/workflows/pages.yml` | deploys the site when page code changes (data is read from raw) |
