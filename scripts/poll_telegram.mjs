@@ -176,12 +176,18 @@ async function recordJoin(pending, joinsThisPass, rosterByCode, from, codeRaw, b
     pending.find((p) => p.code === code && String(p.tg) !== tgId) ||
     joinsThisPass.find((p) => p.code === code && String(p.tg) !== tgId) ||
     (Number(rosterByCode.get(code)?.tg || 0) && String(rosterByCode.get(code).tg) !== tgId
-      ? { code, tg: rosterByCode.get(code).tg }
+      ? {
+          code,
+          tg: rosterByCode.get(code).tg,
+          owner: [rosterByCode.get(code).name, rosterByCode.get(code).nameAm].filter(Boolean).join(" / ") || null,
+        }
       : null);
   if (dup) {
     await tg("sendMessage", {
       chat_id: from.id,
-      text: `⚠️ Code <b>${esc(code)}</b> is already claimed by someone else. Ask the office for your own code.\n⚠️ ይህ ኮድ ለሌላ ሰው ተይዟል። ለቢሮው ይጠይቁ።`,
+      text:
+        `⚠️ <b>${esc(code)}</b> is already claimed${dup.owner ? ` by ${esc(dup.owner)}` : " by someone else"} — it is registered to another phone. Ask the office for your own code.\n` +
+        `────────\n⚠️ <b>${esc(code)}</b> ለሌላ ሰው ተይዟል (ለሌላ ስልክ ተመዝጧል)። ለቢሮው የራስዎን ኮድ ይጠይቁ።`,
       parse_mode: "HTML",
     });
     return false;
@@ -193,9 +199,15 @@ async function recordJoin(pending, joinsThisPass, rosterByCode, from, codeRaw, b
     username: from.username || null,
     ts: new Date().toISOString(),
   };
+  // A person may have an OLD queued claim (e.g. a typo'd code) and now send the
+  // right one — replace their row instead of rejecting; two rows per person would
+  // make the apply loop skip them ("already linked meanwhile" only covers roster
+  // links, not stale queue rows).
+  const ownRow = pending.findIndex((p) => String(p.tg) === tgId);
+  if (ownRow >= 0 && pending[ownRow].code !== code) pending.splice(ownRow, 1);
   // One slot per code AND one slot per person: replacing by (code OR tg) used to let
   // a second joiner overwrite the first joiner's row, leaving exactly one registration.
-  const i = pending.findIndex((p) => p.code === code || String(p.tg) === tgId);
+  const i = pending.findIndex((p) => p.code === code && String(p.tg) === tgId);
   if (i >= 0) pending[i] = entry;
   else pending.push(entry);
   const j = joinsThisPass.findIndex((p) => p.code === code || String(p.tg) === tgId);
@@ -572,12 +584,11 @@ async function main() {
     // ---- /join CODE: self-service telegram-id pairing (no CLI, no AI) ----
     const joinMatch = /^\/join(?:@\w+)?\s+(\S+)/i.exec(cmd);
     if (joinMatch) {
-      if (!AUTO_ASSIGN) {
-        await tg("sendMessage", {
-          chat_id: from.id,
-          text: "Self-registration is disabled here — send the office your id: " + String(from.id),
-        });
-      } else if (JOIN_SECRET) {
+      // Queue mode (AUTO_ASSIGN=0) still RECORDS claims: the office reviews them
+      // with `roster.mjs pending` and applies with --apply. The old code answered
+      // "self-registration is disabled" and threw the claim away — the queue was
+      // then always empty and approval had nothing to approve.
+      if (JOIN_SECRET) {
         const secret = /^\/join(?:@\w+)?\s+\S+\s+(\S+)/i.exec(cmd)?.[1] || "";
         if (secret.trim() !== JOIN_SECRET) {
           await tg("sendMessage", {
@@ -852,8 +863,18 @@ async function main() {
   // and takes effect immediately — no CLI step, no AI. The roster file lands in
   // git together with the archive, so the encrypted mapping stays the source of
   // truth. With AUTO_ASSIGN=0 the queue waits for `roster.mjs pending --apply`.
+  //
+  // The final queue content is computed HERE, once, and always persisted at the
+  // end of the pass. Two regressions lived in the old shape of this block:
+  //   1. queue mode (AUTO_ASSIGN=0) skipped claims recorded in THIS pass and then
+  //      decided "nothing changed" by comparing counts — so brand-new claims were
+  //      never written to private/pending.enc.json ("Request saved" on Telegram,
+  //      empty queue for the office);
+  //   2. rejected-hijack rows were answered with a sendMessage EVERY pass, since
+  //      the row itself sat in the queue (spam loop). Now the rejection happens
+  //      once, at recordJoin time, against the loaded roster — the row never even
+  //      enters the queue.
   let joined = 0;
-  const stillPending = [];
   const appliedClaims = [];
   // O(1) code lookup instead of scanning the roster once per pending claim
   const byCode = new Map((roster.salesmen || []).map((s) => [s.code, s]));
@@ -862,42 +883,49 @@ async function main() {
   // apply it now and persist the roster file. This is what makes "nobody visible
   // on a fresh install" self-heal: send /join SM-001, wait one pass, done.
   const bootstrapping = bootstrapMode;
-  const claims = [...(pending || [])];
+  // start from the queue loaded at the top of the pass (recordJoin may have added
+  // rows to it during this pass too), then add any claim seen this pass that is
+  // not already represented — dedupe by (code, tg) AND by tg (one slot per person)
+  const finalQueue = Array.isArray(pending) ? [...pending] : [];
+  const inQueue = (j) =>
+    finalQueue.some((p) => String(p.tg) === String(j.tg) || (p.code === j.code && String(p.tg) === String(j.tg)));
   for (const j of joinsThisPass) {
-    if (!claims.some((p) => p.code === j.code && String(p.tg) === String(j.tg))) claims.push(j);
+    if (!inQueue(j)) finalQueue.push(j);
   }
   const claimedCodes = new Set();
-  // Claims that were rejected because their code belongs to somebody else must NOT
-  // sit in the queue forever: they would re-trigger the rejection message on every
-  // pass (spam) and keep the pending file dirty. Drop them after 3 days instead.
-  const staleRejection = (p) => p.ts && Date.now() - Date.parse(p.ts) > 3 * 86400000;
-  for (const p of claims) {
-    if (!p?.code || !p?.tg) continue;
-    if (byTg.has(String(p.tg))) continue; // already linked meanwhile
+  // remove every queue row belonging to a person/code pair that leaves the queue
+  // (applied, already linked, rejected, or expired) — rows may exist in BOTH the
+  // loaded queue and joinsThisPass, so splice them all, not just the first match
+  const keepClaim = (p) => {
+    for (let i = finalQueue.length - 1; i >= 0; i--) {
+      const q = finalQueue[i];
+      if (q.code === p.code && String(q.tg) === String(p.tg)) finalQueue.splice(i, 1);
+    }
+  };
+  for (const p of [...finalQueue]) {
+    if (!p?.code || !p?.tg) { keepClaim(p); continue; }
+    if (byTg.has(String(p.tg))) { keepClaim(p); continue; } // already linked meanwhile
     if (claimedCodes.has(p.code)) continue; // one link per code per pass (FIFO wins)
     const sm = byCode.get(p.code);
     // Never steal a code that is ALREADY linked to a different telegram id — without
     // this guard, a stray /join SM-001 from a new device would silently re-point an
     // existing salesman's pin to the newcomer, and the office would only ever see
-    // ONE person on the map no matter how many joined.
+    // ONE person on the map no matter how many joined. The stranger was already told
+    // at message time (recordJoin checks the loaded roster); drop the row here so it
+    // cannot re-notify anyone or linger in the queue.
     if (sm && Number(sm.tg) && String(sm.tg) !== String(p.tg)) {
-      console.warn(`[poller] /join ${p.code} rejected: code already linked to tg=${sm.tg}, not ${p.tg}`);
-      if (!staleRejection(p)) {
-        await tg("sendMessage", {
-          chat_id: Number(p.tg),
-          text: `⚠️ <b>${esc(p.code)}</b> is already registered to another phone. Ask the office for your own code.\n⚠️ <b>${esc(p.code)}</b> ለሌላ ስልክ ተመዝጧል። ለቢሮው ይጠይቁ።`,
-          parse_mode: "HTML",
-        });
-        stillPending.push(p);
-      }
+      console.warn(`[poller] dropping queued /join ${p.code} from tg=${p.tg}: code already linked to tg=${sm.tg}`);
+      keepClaim(p);
       continue;
     }
     if (!sm || (!AUTO_ASSIGN && !bootstrapping)) {
       // keep unknown codes in the queue (typo can be fixed by re-sending /join),
+      // keep legitimate manual-approval claims in the queue,
       // drop claims older than 30 days so the file cannot grow forever
-      if (!p.ts || Date.now() - Date.parse(p.ts) < 30 * 86400000) stillPending.push(p);
+      if (p.ts && Date.now() - Date.parse(p.ts) >= 30 * 86400000) keepClaim(p);
       continue;
     }
+    keepClaim(p);
     sm.tg = Number(p.tg);
     if (p.username && !sm.username) sm.username = p.username;
     byTg.set(String(sm.tg), sm);
@@ -985,22 +1013,16 @@ async function main() {
       console.log(`[poller] recovered ${[...recoveredByCode.values()].flat().length} pre-link location(s) for ${recoveredByCode.size} newly linked salesman — visible on the map now`);
     }
   }
-  const loadedCount = (pending || []).length;
-  const newThisPass = joinsThisPass.filter((j) => !pending.some((p) => p.code === j.code && String(p.tg) === String(j.tg))).length;
-  if (joined || stillPending.length !== loadedCount + newThisPass) {
-    await writeJson(pendingFile(), encryptJson(stillPending, PASS()));
-    if (joined) {
-      await writeJson(ROSTER_FILE, encryptJson(roster, PASS())); // also ends bootstrap mode next pass
-      console.log(`[poller] auto-linked ${joined} salesman via /join`);
-    }
-  } else if (pendingDirty) {
-    // claims recorded this pass that were not applied (AUTO_ASSIGN=0 queue mode):
-    // persist them so the office can review with `roster.mjs pending`
-    const merged = [...(pending || [])];
-    for (const j of joinsThisPass) {
-      if (!merged.some((p) => p.code === j.code && String(p.tg) === String(j.tg))) merged.push(j);
-    }
-    await writeJson(pendingFile(), encryptJson(merged, PASS()));
+  // Persist the queue computed above. The write is UNCONDITIONAL: the old code
+  // compared counts to decide "nothing changed" and silently dropped brand-new
+  // claims in AUTO_ASSIGN=0 mode — the office saw an empty queue while Telegram
+  // users had been told "Request saved". One row per person survives a replay of
+  // the same update (recordJoin dedupes by tg), so rewriting the same content is
+  // harmless; skipping it was not.
+  await writeJson(pendingFile(), encryptJson(finalQueue, PASS()));
+  if (joined) {
+    await writeJson(ROSTER_FILE, encryptJson(roster, PASS())); // also ends bootstrap mode next pass
+    console.log(`[poller] auto-linked ${joined} salesman via /join`);
   }
 
   // ---- encrypted live payload for the public dashboard ----
