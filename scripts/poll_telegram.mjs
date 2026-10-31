@@ -22,9 +22,13 @@ import { encryptJson, decryptJson } from "./crypto.mjs";
 import { buildReports } from "./report.mjs";
 
 const ROOT = process.cwd();
-let ARCHIVE = path.resolve(ROOT, process.env.ARCHIVE_DIR || "archive");
-let ROSTER_FILE = path.resolve(ROOT, process.env.ROSTER_FILE || "private/roster.enc.json");
-let OUT_DIR = path.resolve(ROOT, process.env.OUT_DIR || "dashboard/public");
+// DATA_DIR relocates the whole mutable state tree (archive/, private/, dashboard/public)
+// onto a persistent volume. On Render, point it at an attached Disk; otherwise the
+// sub-dir env vars below can each be set to an absolute path on their own.
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : "";
+let ARCHIVE = path.resolve(ROOT, process.env.ARCHIVE_DIR || (DATA_DIR ? path.join(DATA_DIR, "archive") : "archive"));
+let ROSTER_FILE = path.resolve(ROOT, process.env.ROSTER_FILE || (DATA_DIR ? path.join(DATA_DIR, "private/roster.enc.json") : "private/roster.enc.json"));
+let OUT_DIR = path.resolve(ROOT, process.env.OUT_DIR || (DATA_DIR ? path.join(DATA_DIR, "dashboard/public") : "dashboard/public"));
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const PASS = () => process.env.DASH_PASSPHRASE || "";
 
