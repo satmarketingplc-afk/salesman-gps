@@ -145,13 +145,18 @@ start command and the health check.
 
 | Key | Value | Needed |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | bot token from BotFather | yes |
-| `DASH_PASSPHRASE` | `SalesMap-2026-Addis` (same as GitHub secret) | yes |
-| `GH_DISPATCH_TOKEN` | fine-grained PAT, **Actions: write**, this repo | optional |
+| `TELEGRAM_BOT_TOKEN` | bot token from BotFather | yes (both services) |
+| `DASH_PASSPHRASE` | your passphrase — never commit it to this repo or any doc | yes (both services) |
+| `DATA_DIR` | shared folder for poller state (`archive/`, `private/`, live payload); set the same value on web + worker and attach a Render Disk mounted at that path, otherwise a redeploy wipes the offset and archive | yes |
+| `AUTO_ASSIGN` | `0` = manual approval queue for new join codes; unset = auto-register | optional (worker) |
+| `POLL_INTERVAL_S` | seconds between poll passes (default 15) | optional (worker) |
 
-With `GH_DISPATCH_TOKEN` set, Refresh also starts a poll run immediately, so the new point is
-committed about 1 minute later instead of waiting for the next pass (≤ 4 min); the raw CDN
-can add a few more minutes before every browser sees it.
+⚠️ **Rotate the passphrase once when moving off GitHub.** The previous value was printed in
+this file's history; treat anything documented publicly as compromised. Set the new value in
+Render only, then re-encrypt old data with `node scripts/reencrypt.mjs`.
+
+With `DATA_DIR` set, Refresh writes a wake marker the poll-loop picks up within ~1 s, so the
+new point lands almost immediately instead of waiting out the interval.
 
 ### What Refresh does
 

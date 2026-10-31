@@ -286,7 +286,10 @@ async function decrypt(payload, passphrase) {
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
-// Online-only: always read the live payload from the hosted repo (GitHub raw).
+// Render-hosted: /api/live serves the freshest live.enc.json straight from the poller's
+// disk (no-store), so a redeploy never freezes the map. When the page is opened outside
+// the Render service (e.g. a local file or the old GitHub Pages mirror) there is no
+// /api/live, so fall back to raw.githubusercontent.com as before.
 // Works identically on GitHub Pages and Render — no local/file fallbacks.
 // Owner/repo are derived automatically from the page URL, so forks and renames
 // work with zero edits. Override with ?owner=X&repo=Y&tld=github.io if needed.
@@ -304,7 +307,12 @@ async function decrypt(payload, passphrase) {
   window.GH_OWNER = q.get("owner") || owner;
   window.GH_REPO_NAME = q.get("repo") || repo;
 })();
-const LIVE_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO_NAME}/main/dashboard/public/live.enc.json`;
+const RAW_LIVE_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO_NAME}/main/dashboard/public/live.enc.json`;
+// Same-origin on Render; GitHub raw as fallback (Pages mirror / no /api/live).
+let LIVE_URL = RAW_LIVE_URL;
+const liveProbe = fetch("/api/live", { method: "HEAD", cache: "no-store" })
+  .then((r) => { if (r.ok) LIVE_URL = "/api/live"; })
+  .catch(() => {});
 
 // The hosting server (Render) answers /healthz and can ask the team for a fresh point.
 // On GitHub Pages these paths 404, so the button silently falls back to a plain reload.
@@ -341,6 +349,7 @@ async function loadOnce() {
     pass = pass.trim();
   }
   if (!pass) { $("gate").classList.remove("hidden"); return; }
+  await liveProbe; // resolve /api/live vs GitHub raw once, before the first fetch
   try {
     const res = await fetch(`${LIVE_URL}?t=${Date.now()}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`http ${res.status}`);

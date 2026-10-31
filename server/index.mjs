@@ -33,11 +33,19 @@ const DIST = path.resolve(process.env.STATIC_DIR || path.join(ROOT, "dist"));
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const PASS = process.env.DASH_PASSPHRASE || "";
 const API = (process.env.TELEGRAM_API_BASE || "https://api.telegram.org").replace(/\/+$/, "");
-const GH_TOKEN = process.env.GH_DISPATCH_TOKEN || "";
-const REPO = process.env.GH_REPO || "satmarketingplc-afk/salesman-gps";
+// DATA_DIR is where the Render poller keeps its live state (archive/, private/,
+// dashboard/public). When web and worker share a Disk, /api/live and ROSTER_FILE read
+// straight from it — no GitHub anywhere in the serving path.
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : "";
+const REPO = process.env.GH_REPO || "satmarketingplc-afk/salesman-gps"; // legacy fallback only
 const PORT = Number(process.env.PORT || 10000);
 
-const ROSTER_FILE = process.env.ROSTER_FILE ? path.resolve(process.env.ROSTER_FILE) : "";
+const ROSTER_FILE = process.env.ROSTER_FILE
+  ? path.resolve(process.env.ROSTER_FILE)
+  : (DATA_DIR ? path.join(DATA_DIR, "private/roster.enc.json") : "");
+const LIVE_FILE = process.env.LIVE_FILE
+  ? path.resolve(process.env.LIVE_FILE)
+  : (DATA_DIR ? path.join(DATA_DIR, "dashboard/public/live.enc.json") : "");
 const ROSTER_URL = `https://raw.githubusercontent.com/${REPO}/main/private/roster.enc.json`;
 
 const GLOBAL_COOLDOWN_MS = Number(process.env.NUDGE_GLOBAL_COOLDOWN_MS || 20_000); // button cannot hammer the bot
@@ -171,20 +179,14 @@ async function telegram(method, payload) {
 }
 
 async function dispatchPoll() {
-  if (!GH_TOKEN) return false;
+  // GitHub Actions is gone; Refresh now just bumps the wake marker that the Render
+  // poller loop watches, so its next pass starts within a couple of seconds instead
+  // of waiting out the full POLL_INTERVAL_S sleep. Returns false when no DATA_DIR is
+  // configured (single-service dev setups) — nudge itself still worked.
+  if (!DATA_DIR) return false;
   try {
-    const res = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/poll.yml/dispatches`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${GH_TOKEN}`,
-        accept: "application/vnd.github+json",
-        "content-type": "application/json",
-        "user-agent": "salesman-gps",
-      },
-      body: JSON.stringify({ ref: "main" }),
-      signal: AbortSignal.timeout(12_000),
-    });
-    return res.status === 204;
+    await fs.writeFile(path.join(DATA_DIR, "wake"), String(Date.now()));
+    return true;
   } catch {
     return false;
   }
@@ -285,7 +287,7 @@ const CSP = [
   "script-src 'self' https://unpkg.com",
   "style-src 'self' 'unsafe-inline' https://unpkg.com",
   "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://unpkg.com",
-  "connect-src 'self' https://raw.githubusercontent.com https://api.github.com",
+  "connect-src 'self' https://raw.githubusercontent.com",
   "frame-ancestors 'self'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -376,8 +378,26 @@ const server = http.createServer(async (req, res) => {
         service: "salesman-gps",
         ts: new Date().toISOString(),
         bot: Boolean(TOKEN),
-        dispatch: Boolean(GH_TOKEN),
+        dispatch: Boolean(DATA_DIR),
       });
+    }
+    if (pathname === "/api/live") {
+      // Fresh live payload straight from the poller's disk — never cached anywhere,
+      // so the map always shows the newest pass even after a web-service redeploy.
+      if (!LIVE_FILE) return json(res, 503, { ok: false, error: "no_data_dir" });
+      try {
+        const body = await fs.readFile(LIVE_FILE);
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+          "content-length": body.length,
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+        });
+        return req.method === "HEAD" ? res.end(body) : res.end(body);
+      } catch {
+        return json(res, 404, { ok: false, error: "live_unavailable" });
+      }
     }
     if (pathname === "/api/nudge") {
       if (req.method !== "POST") return json(res, 405, { ok: false, error: "method" }, { allow: "POST" });
@@ -395,5 +415,5 @@ const server = http.createServer(async (req, res) => {
 
 server.timeout = 30_000;
 server.listen(PORT, () => {
-  console.log(`[server] http://localhost:${PORT}  static=${DIST}  bot=${Boolean(TOKEN)}  dispatch=${Boolean(GH_TOKEN)}`);
+  console.log(`[server] http://localhost:${PORT}  static=${DIST}  bot=${Boolean(TOKEN)}  dispatch=${Boolean(DATA_DIR)}`);
 });

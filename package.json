@@ -10,6 +10,6 @@
     "start": "node server/index.mjs",
     "poll": "node scripts/poll_telegram.mjs",
     "mock": "node scripts/mock_live.mjs",
-    "test": "node test/join-multi.test.mjs"
+    "test": "node test/join-staged.test.mjs && node test/join-queue.test.mjs && node test/join-multi.test.mjs && node test/pin.test.mjs"
   }
 }
