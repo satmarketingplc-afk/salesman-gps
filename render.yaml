@@ -10,12 +10,18 @@ services:
     startCommand: node server/index.mjs
     healthCheckPath: /healthz
     autoDeploy: false
+    disks:
+      # Persistent state shared with the poller worker. MUST use the same name and
+      # mountPath in both services — that is how the web service reads live.enc.json
+      # written by the poller, and how offset/roster survive redeploys.
+      - name: salesman-gps-data
+        mountPath: /var/tmp/salesman-gps-data
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: DASH_PASSPHRASE
         sync: false
-      # where the poller keeps its state; point this at a Render Disk if you attach one
+      # where the poller keeps its state; shared Disk (see disks:)
       - key: DATA_DIR
         value: /var/tmp/salesman-gps-data
       - key: ROSTER_FILE
@@ -31,6 +37,11 @@ services:
     buildCommand: npm ci --omit=dev || true   # poller itself is dependency-free
     startCommand: bash scripts/poll_loop.sh
     autoDeploy: false
+    disks:
+      # Same Disk as the web service (identical name + mountPath) — this pair of
+      # services communicates entirely through this shared volume.
+      - name: salesman-gps-data
+        mountPath: /var/tmp/salesman-gps-data
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
