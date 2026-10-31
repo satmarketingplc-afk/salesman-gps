@@ -3,11 +3,8 @@ services:
     name: salesman-gps
     runtime: node
     plan: free
-    # dist/ carries the static pages; live.enc.json + roster are served from disk by
-    # /api/live and ROSTER_FILE (the poller writes them into DATA_DIR), so a redeploy
-    # no longer freezes the map.
     buildCommand: rm -rf dist && mkdir -p dist && cp index.html dist/ && cp -r app dashboard dist/
-    startCommand: node server/index.mjs
+    startCommand: bash -c 'bash scripts/poll_loop.sh >> /tmp/poll_loop.log 2>&1 & exec node server/index.mjs'
     healthCheckPath: /healthz
     autoDeploy: false
     envVars:
@@ -15,30 +12,11 @@ services:
         sync: false
       - key: DASH_PASSPHRASE
         sync: false
-      # where the poller keeps its state; point this at a Render Disk if you attach one
       - key: DATA_DIR
-        value: /var/tmp/salesman-gps-data
-      - key: ROSTER_FILE
-        value: /var/tmp/salesman-gps-data/private/roster.enc.json
-
-  # The Telegram poller. Replaces .github/workflows/poll.yml, which was deleted when
-  # the system moved off GitHub Actions. Runs forever: one pass every POLL_INTERVAL_S
-  # seconds, hourly report builds. Needs the same token + passphrase as the web service.
-  - type: worker
-    name: salesman-gps-poller
-    runtime: node
-    plan: free
-    buildCommand: npm ci --omit=dev || true   # poller itself is dependency-free
-    startCommand: bash scripts/poll_loop.sh
-    autoDeploy: false
-    envVars:
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: DASH_PASSPHRASE
-        sync: false
-      - key: DATA_DIR
-        value: /var/tmp/salesman-gps-data
-      - key: AUTO_ASSIGN
-        sync: false        # "0" = manual approval queue, unset/"1" = auto-register
+        value: /tmp/salesman-gps-data
+      - key: BUILD_REPORTS
+        value: "1"
       - key: POLL_INTERVAL_S
-        sync: false        # seconds between getUpdates long-polls (default 15)
+        sync: false
+      - key: AUTO_ASSIGN
+        sync: false
